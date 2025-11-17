@@ -1,3 +1,4 @@
+// app/api/auth/login/route.ts
 import { NextResponse } from "next/server";
 
 export const dynamic = "force-dynamic";
@@ -9,12 +10,10 @@ export async function POST(req: Request) {
     const body = await req.json();
     const { email, password } = body as any;
 
-    // ajuste essas variáveis pro que você já tem no .env
     if (
       email === process.env.APP_USER &&
       password === process.env.APP_PASS
     ) {
-      // aqui pode devolver o token/sessão real depois
       return NextResponse.json({ ok: true, token: "token-falso-exemplo" });
     }
 
