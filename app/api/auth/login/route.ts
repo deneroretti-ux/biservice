@@ -6,10 +6,9 @@ export const revalidate = 0;
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-    const { email, password } = body;
+    const { email, password } = body as any;
 
-    // 🔐 Aqui entra sua validação de login
-    // Se já tinha validação antes, copie a lógica pra cá
+    // 👇 Ajuste isso pro mesmo critério que você já usa
     if (
       email === process.env.APP_USER &&
       password === process.env.APP_PASS
