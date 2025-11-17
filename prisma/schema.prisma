@@ -1,0 +1,54 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           Int      @id @default(autoincrement())
+  email        String   @unique
+  name         String
+  passwordHash String
+  role         String   @default("admin")
+  createdAt    DateTime @default(now())
+}
+
+model Tenant {
+  id      Int     @id @default(autoincrement())
+  name    String            // <-- REMOVIDO @db.VarChar(120)
+  uploads Upload[]
+  fatos   FatoConferencia[]
+}
+
+model Upload {
+  id         Int       @id @default(autoincrement())
+  tenantId   Int?
+  tenant     Tenant?    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  filePath   String
+  createdAt  DateTime   @default(now())
+  status     String     @default("pending")  // <-- REMOVIDO @db.VarChar(20)
+  log        String     @default("")
+  rows       FatoConferencia[]
+}
+
+model FatoConferencia {
+  id          Int       @id @default(autoincrement())
+  tenantId    Int?
+  tenant      Tenant?   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  uploadId    Int
+  upload      Upload    @relation(fields: [uploadId], references: [id], onDelete: Cascade)
+  datahora    DateTime?
+  datadia     DateTime? // <-- REMOVIDO @db.Date (SQLite não tem date-only)
+  conferente  String?
+  cidade      String?
+  endereco    String?
+  qtdpedidos  Int       @default(1)
+  qtditens    Int?
+
+  @@index([datadia])
+  @@index([conferente])
+  @@index([cidade])
+}
