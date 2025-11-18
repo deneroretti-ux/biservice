@@ -27,27 +27,7 @@ type Row = {
   qtditens: number;
 };
 
-type StatsResult = {
-  totals: {
-    totalPedidos: number;
-    totalItens: number;
-    jornadaTotal: number;
-    pedidosHoraGeral: number;
-  };
-  charts: {
-    pedidosPorConferente: { conferente: string; pedidos: number }[];
-    itensPorConferente: { conferente: string; itens: number }[];
-    jornadaPorConferente: { conferente: string; horas: number }[];
-    pedidosHoraPorConferente: { conferente: string; pedidos_hora: number }[];
-    pedidosPorCidade: { cidade: string; pedidos: number }[];
-  };
-  filters: {
-    cidades: string[];
-    conferentes: string[];
-  };
-};
-
-/* ====== HELPERS DE DATA ====== */
+/* ====== HELPERS DE DATA (mesmos do backend) ====== */
 function excelSerialToDate(n: number): Date | null {
   if (!isFinite(n)) return null;
   const ms = (n - 25569) * 86400 * 1000;
@@ -101,7 +81,7 @@ function normStr(v: any): string | null {
   return s.length ? s : null;
 }
 
-/** Extrai a cidade do endereço no formato “... - CIDADE - UF” */
+/** Extrai a cidade do endereço no formato “... - CIDADE - UF” (igual backend) */
 function extractCity(addr: any): string | null {
   const s = normStr(addr);
   if (!s) return null;
@@ -116,10 +96,10 @@ function extractCity(addr: any): string | null {
   return tokens.length ? tokens[tokens.length - 1].toUpperCase() : null;
 }
 
-/* Colunas fixas (mesmo mapeamento do /area/upload) */
+/* Colunas fixas (mesmo mapeamento do /api/upload) */
 const COL = { G: 6, J: 9, W: 22, AH: 33, AI: 34 } as const;
 
-/* ====== PARSE DA PLANILHA NO BROWSER ====== */
+/* ====== PARSE DA PLANILHA NO BROWSER (como parseFileToRows) ====== */
 function parseWorkbookToRows(wb: XLSX.WorkBook): Row[] {
   const ws = wb.Sheets[wb.SheetNames[0]];
   if (!ws) return [];
@@ -146,6 +126,7 @@ function parseWorkbookToRows(wb: XLSX.WorkBook): Row[] {
       datadia
     };
 
+    // filtra linhas totalmente vazias
     if (row.conferente || row.qtdpedidos || row.qtditens || row.datahora) {
       mapped.push(row);
     }
@@ -154,7 +135,27 @@ function parseWorkbookToRows(wb: XLSX.WorkBook): Row[] {
   return mapped;
 }
 
-/* ====== AGREGAÇÃO ====== */
+/* ====== AGREGAÇÕES (igual /api/stats, só que no front) ====== */
+type StatsResult = {
+  totals: {
+    totalPedidos: number;
+    totalItens: number;
+    jornadaTotal: number;
+    pedidosHoraGeral: number;
+  };
+  charts: {
+    pedidosPorConferente: { conferente: string; pedidos: number }[];
+    itensPorConferente: { conferente: string; itens: number }[];
+    jornadaPorConferente: { conferente: string; horas: number }[];
+    pedidosHoraPorConferente: { conferente: string; pedidos_hora: number }[];
+    pedidosPorCidade: { cidade: string; pedidos: number }[];
+  };
+  filters: {
+    cidades: string[];
+    conferentes: string[];
+  };
+};
+
 function buildStats(allRows: Row[], filteredRows: Row[]): StatsResult {
   let totalPedidos = 0;
   let totalItens = 0;
@@ -162,6 +163,7 @@ function buildStats(allRows: Row[], filteredRows: Row[]): StatsResult {
   const somaPedidosPorConf = new Map<string, number>();
   const somaItensPorConf = new Map<string, number>();
   const somaPedidosPorCidade = new Map<string, number>();
+
   const jornadaPorDiaConf = new Map<string, { min: number; max: number }>();
 
   for (const r of filteredRows) {
@@ -169,6 +171,7 @@ function buildStats(allRows: Row[], filteredRows: Row[]): StatsResult {
     const cid = (r.cidade ?? '—').trim();
     const itens = Number(r.qtditens ?? 0);
 
+    // pedidos com fallback (se não veio qtdpedidos mas tem itens, conta 1)
     const qtd = Number(r.qtdpedidos);
     const pedidosEff = Number.isFinite(qtd) && qtd > 0 ? qtd : itens > 0 ? 1 : 0;
 
@@ -179,6 +182,7 @@ function buildStats(allRows: Row[], filteredRows: Row[]): StatsResult {
     somaItensPorConf.set(conf, (somaItensPorConf.get(conf) ?? 0) + itens);
     somaPedidosPorCidade.set(cid, (somaPedidosPorCidade.get(cid) ?? 0) + pedidosEff);
 
+    // jornada: min/max hora por (dia, conferente)
     if (r.datadia && r.datahora) {
       const diaStr = r.datadia.toISOString().slice(0, 10);
       const key = `${conf}__${diaStr}`;
@@ -193,6 +197,7 @@ function buildStats(allRows: Row[], filteredRows: Row[]): StatsResult {
     }
   }
 
+  // soma das horas por conferente
   const somaHorasPorConf = new Map<string, number>();
   for (const [key, mm] of jornadaPorDiaConf.entries()) {
     const [conf] = key.split('__');
@@ -224,6 +229,7 @@ function buildStats(allRows: Row[], filteredRows: Row[]): StatsResult {
     .map(([cidade, pedidos]) => ({ cidade, pedidos }))
     .sort((a, b) => b.pedidos - a.pedidos);
 
+  // filtros: distinct de todas as linhas carregadas (não só filtradas)
   const cidades = Array.from(
     new Set(allRows.map((r) => (r.cidade ? String(r.cidade) : '—')))
   ).sort();
@@ -264,9 +270,13 @@ function buildStats(allRows: Row[], filteredRows: Row[]): StatsResult {
 export default function DashboardPage() {
   const router = useRouter();
 
+  // linhas brutas da planilha
   const [allRows, setAllRows] = useState<Row[]>([]);
+
+  // dados agregados para os cards/gráficos
   const [data, setData] = useState<StatsResult | null>(null);
 
+  // estados de UI
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState('');
   const [from, setFrom] = useState('');
@@ -276,13 +286,16 @@ export default function DashboardPage() {
   const [topN, setTopN] = useState(5);
 
   const fileRef = useRef<HTMLInputElement | null>(null);
+  
+    // ... seus useState atuais
+  const [allRows, setAllRows] = useState<Row[]>([]);
+  const [data, setData] = useState<StatsResult | null>(null);
+  // etc...
 
-  const [isMobile, setIsMobile] = useState(false);
-
-  // 🔹 Carrega dados vindos da página /area/upload, se existirem
+  // 🔹 Tenta carregar dados salvos pela página /upload (localStorage)
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    if (allRows.length) return;
+    if (allRows.length) return; // se já carregou via upload local, não precisa
 
     const raw = localStorage.getItem('conferenciaRows');
     if (!raw) return;
@@ -295,7 +308,7 @@ export default function DashboardPage() {
         qtdpedidos: Number(r.qtdpedidos ?? 0),
         qtditens: Number(r.qtditens ?? 0),
         datadia: r.datadia ? new Date(r.datadia) : null,
-        datahora: r.datahora ? new Date(r.datahora) : null
+        datahora: r.datahora ? new Date(r.datahora) : null,
       }));
 
       if (rows.length) {
@@ -304,9 +317,11 @@ export default function DashboardPage() {
     } catch (e) {
       console.error('Erro carregando conferenciaRows do localStorage', e);
     }
-  }, [allRows.length]);
+  }, []);
+
 
   // Responsividade
+  const [isMobile, setIsMobile] = useState(false);
   useEffect(() => {
     const check = () => setIsMobile(window.innerWidth < 768);
     check();
@@ -314,13 +329,14 @@ export default function DashboardPage() {
     return () => window.removeEventListener('resize', check);
   }, []);
 
-  // Recalcula stats sempre que filtros ou linhas mudam
+  // Quando filtros mudam OU novas linhas são carregadas, recalcula as stats
   useEffect(() => {
     if (!allRows.length) {
       setData(null);
       return;
     }
 
+    // filtra por período/cidade/conferente
     const filtered = allRows.filter((r) => {
       let ok = true;
 
@@ -349,7 +365,7 @@ export default function DashboardPage() {
     setErr('');
   }, [allRows, from, to, cidade, conferente]);
 
-  /* ====== Upload local direto no dashboard ====== */
+  /* ====== Upload local (igual estoque) ====== */
   async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -364,14 +380,6 @@ export default function DashboardPage() {
         setErr('Não encontrei linhas válidas na planilha.');
         setAllRows([]);
       } else {
-        const serializable = rows.map((r) => ({
-          ...r,
-          datadia: r.datadia ? r.datadia.toISOString() : null,
-          datahora: r.datahora ? r.datahora.toISOString() : null
-        }));
-        if (typeof window !== 'undefined') {
-          localStorage.setItem('conferenciaRows', JSON.stringify(serializable));
-        }
         setAllRows(rows);
       }
     } catch (error: any) {
@@ -385,8 +393,8 @@ export default function DashboardPage() {
   }
 
   const safeArray = (x: any) => (Array.isArray(x) ? x : []);
-  const fmt2 = (x: any) =>
-    x !== null && x !== undefined ? Number(x).toLocaleString('pt-BR') : '0';
+
+  const fmt2 = (x: any) => (x !== null && x !== undefined ? Number(x).toLocaleString('pt-BR') : '0');
 
   const pedidosConf = useMemo(
     () => safeArray(data?.charts?.pedidosPorConferente).slice(0, topN),
@@ -414,7 +422,7 @@ export default function DashboardPage() {
 
   return (
     <main className="max-w-7xl mx-auto p-4 md:p-6">
-      {/* Cabeçalho */}
+      {/* Cabeçalho com logo e padrão de cores (BI Service) */}
       <motion.div
         initial={{ opacity: 0, y: -10 }}
         animate={{ opacity: 1, y: 0 }}
@@ -444,7 +452,7 @@ export default function DashboardPage() {
             ))}
           </select>
 
-          {/* Upload local */}
+          {/* Upload local da planilha de conferência */}
           <label className="flex items-center gap-2 px-3 md:px-4 py-2 rounded bg-emerald-500 hover:bg-emerald-600 transition font-semibold text-white text-sm md:text-base cursor-pointer">
             <Upload size={18} />
             Upload local
@@ -457,7 +465,7 @@ export default function DashboardPage() {
             />
           </label>
 
-          {/* Ir para Estoque */}
+          {/* Botão Estoque → /dashboard-estoque */}
           <button
             onClick={() => router.push('/dashboard-estoque')}
             className="flex items-center gap-2 px-3 md:px-4 py-2 rounded bg-sky-500 hover:bg-sky-600 transition font-semibold text-white text-sm md:text-base"
@@ -465,7 +473,7 @@ export default function DashboardPage() {
             Estoque
           </button>
 
-          {/* Sair */}
+          {/* Botão Sair — retorna para Home */}
           <button
             onClick={async () => {
               try {
@@ -514,26 +522,28 @@ export default function DashboardPage() {
         </div>
       </motion.div>
 
-      {/* Erro / Loading / Nenhum dado */}
+      {/* Erro */}
       {err && (
         <div className="mt-4 rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-red-300 text-sm">
           {err}
         </div>
       )}
 
+      {/* Loading simples */}
       {loading && (
         <div className="mt-4 rounded-xl border border-blue-500/30 bg-blue-500/10 p-3 text-blue-200 text-sm">
           Processando planilha...
         </div>
       )}
 
+      {/* Aviso se nenhum dado */}
       {!loading && !err && !allRows.length && (
         <div className="mt-6 rounded-xl border border-white/10 bg-white/5 p-4 text-sm text-white/80">
-          Envie o arquivo pela página de Upload ou use o botão "Upload local" para carregar a planilha de conferência.
+          Selecione um arquivo XLSX/CSV de conferência para carregar os dados.
         </div>
       )}
 
-      {/* Cards + Gráficos */}
+      {/* Cards de Totais */}
       {data && (
         <>
           <motion.div
@@ -548,6 +558,7 @@ export default function DashboardPage() {
             <InfoCard title="Pedidos/Hora (geral)" value={fmt2(data.totals.pedidosHoraGeral)} color="#8b5cf6" />
           </motion.div>
 
+          {/* Gráficos */}
           <div className="mt-6 grid grid-cols-1 xl:grid-cols-2 gap-4 md:gap-6">
             <AnimatedChart
               title="Pedidos por Conferente"
@@ -581,6 +592,7 @@ export default function DashboardPage() {
               label="pedidos_hora"
               isMobile={isMobile}
             />
+
             <div className="xl:col-span-2">
               <AnimatedChart
                 title="Pedidos por Cidade"
