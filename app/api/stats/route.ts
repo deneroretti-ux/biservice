@@ -27,7 +27,6 @@ export async function GET(req: NextRequest) {
     const cidadeParam = searchParams.get('cidade') || '';
     const confParam = searchParams.get('conferente') || '';
 
-    // trata "Todos"/"Todos os conferentes" como sem filtro
     const cidade =
       cidadeParam.toLowerCase().startsWith('todo') ? '' : cidadeParam;
     const conferente =

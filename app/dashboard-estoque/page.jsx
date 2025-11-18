@@ -760,7 +760,7 @@ export default function DashboardEstoquePage() {
         <div className="max-w-7xl mx-auto flex items-center justify-between gap-3">
           <div className="flex items-center gap-3">
             <div className="h-9 w-9 rounded-xl overflow-hidden ring-1 ring-sky-500/40 bg-sky-500/10 grid place-items-center">
-              <Image src="/logo/logo.svg" alt="BI Service" width={28} height={28} priority />
+              <Image src="/logo/logo.png" alt="BI Service" width={80} height={80} priority />
             </div>
             <div className="leading-tight">
               <div className="text-sm text-white/70">BI Service Beta</div>
