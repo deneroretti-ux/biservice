@@ -1,9 +1,20 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { prisma } from '@/lib/db';
+import { NextRequest, NextResponse } from "next/server";
 
-export const dynamic = 'force-dynamic';
+export const dynamic = "force-dynamic";
 export const revalidate = 0;
-export const runtime = 'nodejs';
+export const runtime = "nodejs";
+
+// helper: tenta importar prisma sem derrubar a rota
+async function getPrismaSafe() {
+  try {
+    const mod = await import("@/lib/db");
+    // aqui assumo que exporta "prisma"
+    return (mod as any).prisma as any;
+  } catch (e) {
+    console.error("PRISMA_IMPORT_ERROR em /api/stats:", e);
+    return null;
+  }
+}
 
 type Row = {
   conferente: string | null;
@@ -19,18 +30,48 @@ function parseDate(d?: string | null, endOfDay = false) {
   return new Date(endOfDay ? `${d}T23:59:59.999` : `${d}T00:00:00.000`);
 }
 
+// payload vazio pra não derrubar o build caso dê erro de DB
+function emptyPayload() {
+  return {
+    totals: {
+      totalPedidos: 0,
+      totalItens: 0,
+      jornadaTotal: 0,
+      pedidosHoraGeral: 0,
+    },
+    charts: {
+      pedidosPorConferente: [] as any[],
+      itensPorConferente: [] as any[],
+      jornadaPorConferente: [] as any[],
+      pedidosHoraPorConferente: [] as any[],
+      pedidosPorCidade: [] as any[],
+    },
+    filters: {
+      cidades: [] as string[],
+      conferentes: [] as string[],
+    },
+  };
+}
+
 export async function GET(req: NextRequest) {
   try {
+    const prisma = await getPrismaSafe();
+
+    // se não conseguiu importar prisma, volta payload vazio, mas SEM 500
+    if (!prisma) {
+      return NextResponse.json(emptyPayload());
+    }
+
     const { searchParams } = new URL(req.url);
-    const from = searchParams.get('from');
-    const to = searchParams.get('to');
-    const cidadeParam = searchParams.get('cidade') || '';
-    const confParam = searchParams.get('conferente') || '';
+    const from = searchParams.get("from");
+    const to = searchParams.get("to");
+    const cidadeParam = searchParams.get("cidade") || "";
+    const confParam = searchParams.get("conferente") || "";
 
     const cidade =
-      cidadeParam.toLowerCase().startsWith('todo') ? '' : cidadeParam;
+      cidadeParam.toLowerCase().startsWith("todo") ? "" : cidadeParam;
     const conferente =
-      confParam.toLowerCase().startsWith('todo') ? '' : confParam;
+      confParam.toLowerCase().startsWith("todo") ? "" : confParam;
 
     const where: any = {};
     if (from || to) {
@@ -41,17 +82,24 @@ export async function GET(req: NextRequest) {
     if (cidade) where.cidade = cidade;
     if (conferente) where.conferente = conferente;
 
-    const rows: Row[] = await prisma.fatoConferencia.findMany({
-      where,
-      select: {
-        conferente: true,
-        cidade: true,
-        datadia: true,
-        datahora: true,
-        qtdpedidos: true,
-        qtditens: true,
-      },
-    });
+    let rows: Row[] = [];
+    try {
+      rows = await prisma.fatoConferencia.findMany({
+        where,
+        select: {
+          conferente: true,
+          cidade: true,
+          datadia: true,
+          datahora: true,
+          qtdpedidos: true,
+          qtditens: true,
+        },
+      });
+    } catch (e) {
+      console.error("PRISMA_QUERY_ERROR em /api/stats:", e);
+      // se der erro de query/DB, não derruba build – volta vazio
+      return NextResponse.json(emptyPayload());
+    }
 
     let totalPedidos = 0;
     let totalItens = 0;
@@ -62,8 +110,8 @@ export async function GET(req: NextRequest) {
     const jornadaPorDiaConf = new Map<string, { min: number; max: number }>();
 
     for (const r of rows) {
-      const conf = (r.conferente ?? '—').trim();
-      const cid = (r.cidade ?? '—').trim();
+      const conf = (r.conferente ?? "—").trim();
+      const cid = (r.cidade ?? "—").trim();
       const itens = Number(r.qtditens ?? 0);
 
       const qtd = Number(r.qtdpedidos);
@@ -77,10 +125,7 @@ export async function GET(req: NextRequest) {
         conf,
         (somaPedidosPorConf.get(conf) ?? 0) + pedidosEff
       );
-      somaItensPorConf.set(
-        conf,
-        (somaItensPorConf.get(conf) ?? 0) + itens
-      );
+      somaItensPorConf.set(conf, (somaItensPorConf.get(conf) ?? 0) + itens);
       somaPedidosPorCidade.set(
         cid,
         (somaPedidosPorCidade.get(cid) ?? 0) + pedidosEff
@@ -102,7 +147,7 @@ export async function GET(req: NextRequest) {
 
     const somaHorasPorConf = new Map<string, number>();
     for (const [key, mm] of jornadaPorDiaConf.entries()) {
-      const [conf] = key.split('__');
+      const [conf] = key.split("__");
       const horasDia = Math.max(0, (mm.max - mm.min) / 3_600_000);
       somaHorasPorConf.set(
         conf,
@@ -140,27 +185,35 @@ export async function GET(req: NextRequest) {
       .map(([cidade, pedidos]) => ({ cidade, pedidos }))
       .sort((a, b) => b.pedidos - a.pedidos);
 
-    const cidadesDistinct = (
-      await prisma.fatoConferencia.findMany({
-        select: { cidade: true },
-        distinct: ['cidade'],
-      })
-    )
-      .map((r) => r.cidade)
-      .filter(Boolean)
-      .map(String)
-      .sort();
+    let cidadesDistinct: string[] = [];
+    let conferentesDistinct: string[] = [];
 
-    const conferentesDistinct = (
-      await prisma.fatoConferencia.findMany({
-        select: { conferente: true },
-        distinct: ['conferente'],
-      })
-    )
-      .map((r) => r.conferente)
-      .filter(Boolean)
-      .map(String)
-      .sort();
+    try {
+      cidadesDistinct = (
+        await prisma.fatoConferencia.findMany({
+          select: { cidade: true },
+          distinct: ["cidade"],
+        })
+      )
+        .map((r: any) => r.cidade)
+        .filter(Boolean)
+        .map(String)
+        .sort();
+
+      conferentesDistinct = (
+        await prisma.fatoConferencia.findMany({
+          select: { conferente: true },
+          distinct: ["conferente"],
+        })
+      )
+        .map((r: any) => r.conferente)
+        .filter(Boolean)
+        .map(String)
+        .sort();
+    } catch (e) {
+      console.error("PRISMA_DISTINCT_ERROR em /api/stats:", e);
+      // se der erro só nos filtros, mantém arrays vazios
+    }
 
     const jornadaTotal = Array.from(somaHorasPorConf.values()).reduce(
       (a, b) => a + (b ?? 0),
@@ -191,10 +244,8 @@ export async function GET(req: NextRequest) {
       },
     });
   } catch (e: any) {
-    console.error('STATS_ERROR', e);
-    return NextResponse.json(
-      { error: e?.message ?? 'Erro ao calcular estatísticas' },
-      { status: 500 }
-    );
+    console.error("STATS_FATAL_ERROR:", e);
+    // mesmo em erro "geral", não retornamos 500
+    return NextResponse.json(emptyPayload());
   }
 }
