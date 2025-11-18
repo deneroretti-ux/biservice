@@ -1,100 +1,206 @@
 // app/api/stats/route.ts
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse } from 'next/server';
+import { prisma } from '@/lib/db';
 
-export const dynamic = "force-dynamic";
+export const dynamic = 'force-dynamic';
 export const revalidate = 0;
-export const runtime = "nodejs";
+export const runtime = 'nodejs';
+
+type Row = {
+  conferente: string | null;
+  cidade: string | null;
+  datadia: Date | null;
+  datahora: Date | null;
+  qtdpedidos: number | null;
+  qtditens: number | null;
+};
+
+function parseDate(d?: string | null, endOfDay = false) {
+  if (!d) return undefined;
+  return new Date(endOfDay ? `${d}T23:59:59.999` : `${d}T00:00:00.000`);
+}
 
 export async function GET(req: NextRequest) {
   try {
-    // lê os filtros (por enquanto não vamos aplicar lógica complexa)
     const { searchParams } = new URL(req.url);
-    const from = searchParams.get("from");
-    const to = searchParams.get("to");
-    const cidade = searchParams.get("cidade");
-    const conferente = searchParams.get("conferente");
+    const from = searchParams.get('from');
+    const to = searchParams.get('to');
+    const cidade = searchParams.get('cidade') || '';
+    const conferente = searchParams.get('conferente') || '';
 
-    console.log("Filtros /api/stats:", { from, to, cidade, conferente });
+    // where dinâmico (usa DATADIA)
+    const where: any = {};
+    if (from || to) {
+      where.datadia = {};
+      if (from) where.datadia.gte = parseDate(from);
+      if (to) where.datadia.lte = parseDate(to, true);
+    }
+    if (cidade) where.cidade = cidade;
+    if (conferente) where.conferente = conferente;
 
-    // =====================================================================
-    // 🔹 AQUI VAI A LÓGICA REAL DE CONFERÊNCIA NO FUTURO
-    //    (ler arquivo enviado, calcular pedidos, itens, jornada etc.)
-    //
-    // POR ENQUANTO vamos devolver dados EXEMPLO só pra fazer o dashboard
-    // funcionar e você conseguir validar layout e fluxo.
-    // =====================================================================
+    // pega só os campos necessários
+    const rows: Row[] = await prisma.fatoConferencia.findMany({
+      where,
+      select: {
+        conferente: true,
+        cidade: true,
+        datadia: true,
+        datahora: true,
+        qtdpedidos: true,
+        qtditens: true,
+      },
+    });
 
-    const conferentes = ["João", "Maria", "Carlos", "Ana", "Pedro"];
-    const cidades = ["Bebedouro", "Barretos", "Ribeirão Preto"];
+    // ---- agregações base ----
+    let totalPedidos = 0;
+    let totalItens = 0;
 
-    const pedidosPorConferente = [
-      { conferente: "João", pedidos: 120 },
-      { conferente: "Maria", pedidos: 95 },
-      { conferente: "Carlos", pedidos: 80 },
-      { conferente: "Ana", pedidos: 70 },
-      { conferente: "Pedro", pedidos: 60 }
-    ];
+    const somaPedidosPorConf = new Map<string, number>();
+    const somaItensPorConf = new Map<string, number>();
+    const somaPedidosPorCidade = new Map<string, number>();
 
-    const itensPorConferente = [
-      { conferente: "João", itens: 1500 },
-      { conferente: "Maria", itens: 1300 },
-      { conferente: "Carlos", itens: 1100 },
-      { conferente: "Ana", itens: 900 },
-      { conferente: "Pedro", itens: 800 }
-    ];
+    // para jornada: min/max HORA por conferente em cada DIA
+    const jornadaPorDiaConf = new Map<string, { min: number; max: number }>();
 
-    const jornadaPorConferente = [
-      { conferente: "João", horas: 40 },
-      { conferente: "Maria", horas: 38 },
-      { conferente: "Carlos", horas: 36 },
-      { conferente: "Ana", horas: 34 },
-      { conferente: "Pedro", horas: 32 }
-    ];
+    for (const r of rows) {
+      const conf = (r.conferente ?? '—').trim();
+      const cid = (r.cidade ?? '—').trim();
+      const itens = Number(r.qtditens ?? 0);
 
-    const pedidosHoraPorConferente = [
-      { conferente: "João", pedidos_hora: 3.0 },
-      { conferente: "Maria", pedidos_hora: 2.6 },
-      { conferente: "Carlos", pedidos_hora: 2.3 },
-      { conferente: "Ana", pedidos_hora: 2.1 },
-      { conferente: "Pedro", pedidos_hora: 1.9 }
-    ];
+      // --- pedidos com fallback ---
+      const qtd = Number(r.qtdpedidos);
+      const pedidosEff =
+        Number.isFinite(qtd) && qtd > 0 ? qtd : itens > 0 ? 1 : 0;
 
-    const pedidosPorCidade = [
-      { cidade: "Bebedouro", pedidos: 180 },
-      { cidade: "Barretos", pedidos: 90 },
-      { cidade: "Ribeirão Preto", pedidos: 135 }
-    ];
+      totalPedidos += pedidosEff;
+      totalItens += itens;
 
-    const totalPedidos = pedidosPorConferente.reduce((acc, x) => acc + x.pedidos, 0);
-    const totalItens = itensPorConferente.reduce((acc, x) => acc + x.itens, 0);
-    const jornadaTotal = jornadaPorConferente.reduce((acc, x) => acc + x.horas, 0);
-    const pedidosHoraGeral = totalPedidos && jornadaTotal ? +(totalPedidos / jornadaTotal).toFixed(2) : 0;
+      somaPedidosPorConf.set(
+        conf,
+        (somaPedidosPorConf.get(conf) ?? 0) + pedidosEff
+      );
+      somaItensPorConf.set(
+        conf,
+        (somaItensPorConf.get(conf) ?? 0) + itens
+      );
+      somaPedidosPorCidade.set(
+        cid,
+        (somaPedidosPorCidade.get(cid) ?? 0) + pedidosEff
+      );
 
-    const payload = {
+      // Jornada (horas) = soma dos (max(hora) - min(hora)) por DIA e Conferente
+      if (r.datadia && r.datahora) {
+        const diaStr = r.datadia.toISOString().slice(0, 10); // YYYY-MM-DD
+        const key = `${conf}__${diaStr}`;
+        const ts = r.datahora.getTime();
+        const cur = jornadaPorDiaConf.get(key);
+        if (!cur) {
+          jornadaPorDiaConf.set(key, { min: ts, max: ts });
+        } else {
+          if (ts < cur.min) cur.min = ts;
+          if (ts > cur.max) cur.max = ts;
+        }
+      }
+    }
+
+    // soma das horas por conferente
+    const somaHorasPorConf = new Map<string, number>();
+    for (const [key, mm] of jornadaPorDiaConf.entries()) {
+      const [conf] = key.split('__');
+      const horasDia = Math.max(0, (mm.max - mm.min) / 3_600_000); // ms → h
+      somaHorasPorConf.set(
+        conf,
+        (somaHorasPorConf.get(conf) ?? 0) + horasDia
+      );
+    }
+
+    // ---- gráficos ----
+    const pedidosPorConferente = Array.from(somaPedidosPorConf.entries())
+      .map(([conferente, pedidos]) => ({ conferente, pedidos }))
+      .sort((a, b) => b.pedidos - a.pedidos);
+
+    const itensPorConferente = Array.from(somaItensPorConf.entries())
+      .map(([conferente, itens]) => ({ conferente, itens }))
+      .sort((a, b) => b.itens - a.itens);
+
+    const jornadaPorConferente = Array.from(somaHorasPorConf.entries())
+      .map(([conferente, horas]) => ({
+        conferente,
+        horas: Number(horas.toFixed(2)),
+      }))
+      .sort((a, b) => (b.horas ?? 0) - (a.horas ?? 0));
+
+    const pedidosHoraPorConferente = pedidosPorConferente
+      .map((p) => {
+        const horas = somaHorasPorConf.get(p.conferente) ?? 0;
+        const pedidos_hora = horas > 0 ? p.pedidos / horas : 0;
+        return {
+          conferente: p.conferente,
+          pedidos_hora: Number(pedidos_hora.toFixed(2)),
+        };
+      })
+      .sort((a, b) => b.pedidos_hora - a.pedidos_hora);
+
+    const pedidosPorCidade = Array.from(somaPedidosPorCidade.entries())
+      .map(([cidade, pedidos]) => ({ cidade, pedidos }))
+      .sort((a, b) => b.pedidos - a.pedidos);
+
+    // ---- filtros (distinct) ----
+    const cidadesDistinct = (
+      await prisma.fatoConferencia.findMany({
+        select: { cidade: true },
+        distinct: ['cidade'],
+      })
+    )
+      .map((r) => r.cidade)
+      .filter(Boolean)
+      .map(String)
+      .sort();
+
+    const conferentesDistinct = (
+      await prisma.fatoConferencia.findMany({
+        select: { conferente: true },
+        distinct: ['conferente'],
+      })
+    )
+      .map((r) => r.conferente)
+      .filter(Boolean)
+      .map(String)
+      .sort();
+
+    // totais auxiliares
+    const jornadaTotal = Array.from(somaHorasPorConf.values()).reduce(
+      (a, b) => a + (b ?? 0),
+      0
+    );
+    const pedidosHoraGeral =
+      jornadaTotal > 0
+        ? Number((totalPedidos / jornadaTotal).toFixed(2))
+        : 0;
+
+    return NextResponse.json({
       totals: {
         totalPedidos,
         totalItens,
-        jornadaTotal,
-        pedidosHoraGeral
+        jornadaTotal: Number(jornadaTotal.toFixed(2)),
+        pedidosHoraGeral,
       },
       charts: {
         pedidosPorConferente,
         itensPorConferente,
         jornadaPorConferente,
         pedidosHoraPorConferente,
-        pedidosPorCidade
+        pedidosPorCidade,
       },
       filters: {
-        cidades,
-        conferentes
-      }
-    };
-
-    return NextResponse.json(payload);
+        cidades: cidadesDistinct,
+        conferentes: conferentesDistinct,
+      },
+    });
   } catch (e: any) {
-    console.error("Erro em /api/stats:", e);
+    console.error('STATS_ERROR', e);
     return NextResponse.json(
-      { error: "Erro ao calcular estatísticas" },
+      { error: e?.message ?? 'Erro ao calcular estatísticas' },
       { status: 500 }
     );
   }
