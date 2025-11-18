@@ -287,38 +287,6 @@ export default function DashboardPage() {
 
   const fileRef = useRef<HTMLInputElement | null>(null);
   
-    // ... seus useState atuais
-  const [allRows, setAllRows] = useState<Row[]>([]);
-  const [data, setData] = useState<StatsResult | null>(null);
-  // etc...
-
-  // 🔹 Tenta carregar dados salvos pela página /upload (localStorage)
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    if (allRows.length) return; // se já carregou via upload local, não precisa
-
-    const raw = localStorage.getItem('conferenciaRows');
-    if (!raw) return;
-
-    try {
-      const parsed = JSON.parse(raw) as any[];
-      const rows: Row[] = parsed.map((r) => ({
-        conferente: r.conferente ?? null,
-        cidade: r.cidade ?? null,
-        qtdpedidos: Number(r.qtdpedidos ?? 0),
-        qtditens: Number(r.qtditens ?? 0),
-        datadia: r.datadia ? new Date(r.datadia) : null,
-        datahora: r.datahora ? new Date(r.datahora) : null,
-      }));
-
-      if (rows.length) {
-        setAllRows(rows);
-      }
-    } catch (e) {
-      console.error('Erro carregando conferenciaRows do localStorage', e);
-    }
-  }, []);
-
 
   // Responsividade
   const [isMobile, setIsMobile] = useState(false);
