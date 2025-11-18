@@ -1,5 +1,6 @@
 'use client';
-import { useEffect, useMemo, useState } from 'react';
+
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
 import { LogOut, Upload } from 'lucide-react';
 import { useRouter } from 'next/navigation';
@@ -14,10 +15,268 @@ import {
   ResponsiveContainer,
   LabelList
 } from 'recharts';
+import * as XLSX from 'xlsx';
+
+/* ====== TIPOS ====== */
+type Row = {
+  conferente: string | null;
+  cidade: string | null;
+  datadia: Date | null;
+  datahora: Date | null;
+  qtdpedidos: number;
+  qtditens: number;
+};
+
+/* ====== HELPERS DE DATA (mesmos do backend) ====== */
+function excelSerialToDate(n: number): Date | null {
+  if (!isFinite(n)) return null;
+  const ms = (n - 25569) * 86400 * 1000;
+  const d = new Date(ms);
+  return isNaN(+d) ? null : d;
+}
+function parsePtBrDate(s: string): Date | null {
+  const m = s.match(
+    /^(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{2,4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?$/
+  );
+  if (!m) return null;
+  const dd = +m[1],
+    MM = +m[2] - 1,
+    yyyy = +(m[3].length === 2 ? '20' + m[3] : m[3]);
+  const hh = m[4] ? +m[4] : 0,
+    mm = m[5] ? +m[5] : 0,
+    ss = m[6] ? +m[6] : 0;
+  const d = new Date(yyyy, MM, dd, hh, mm, ss);
+  return isNaN(+d) ? null : d;
+}
+function parseIsoOrUs(s: string): Date | null {
+  const d1 = new Date(s);
+  if (!isNaN(+d1)) return d1;
+  const m = s.match(/^(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{2,4})$/);
+  if (m) {
+    const MM = +m[1] - 1,
+      dd = +m[2],
+      yyyy = +(m[3].length === 2 ? '20' + m[3] : m[3]);
+    const d2 = new Date(yyyy, MM, dd);
+    if (!isNaN(+d2)) return d2;
+  }
+  return null;
+}
+function toDateFlexible(v: any): Date | null {
+  if (v == null || v === '') return null;
+  if (typeof v === 'number') return excelSerialToDate(v);
+  if (v instanceof Date) return isNaN(+v) ? null : v;
+  return parsePtBrDate(String(v).trim()) || parseIsoOrUs(String(v).trim()) || null;
+}
+function onlyDate(d: Date | null): Date | null {
+  if (!d) return null;
+  const x = new Date(d);
+  x.setHours(0, 0, 0, 0);
+  return x;
+}
+
+/* ====== HELPERS GERAIS ====== */
+function normStr(v: any): string | null {
+  if (v === undefined || v === null) return null;
+  const s = String(v).trim();
+  return s.length ? s : null;
+}
+
+/** Extrai a cidade do endereço no formato “... - CIDADE - UF” (igual backend) */
+function extractCity(addr: any): string | null {
+  const s = normStr(addr);
+  if (!s) return null;
+  const m = s.match(/\s-\s*([A-ZÁ-Ü\s]+?)\s-\s*[A-Z]{2}\s*$/i);
+  if (m && m[1]) return m[1].toString().trim().toUpperCase();
+  const parts = s.split(' - ').map((p) => p.trim());
+  if (parts.length >= 2) {
+    const penultimo = parts[parts.length - 2];
+    if (penultimo) return penultimo.toUpperCase();
+  }
+  const tokens = s.split(/[,/;-]/).map((p) => p.trim()).filter(Boolean);
+  return tokens.length ? tokens[tokens.length - 1].toUpperCase() : null;
+}
+
+/* Colunas fixas (mesmo mapeamento do /api/upload) */
+const COL = { G: 6, J: 9, W: 22, AH: 33, AI: 34 } as const;
+
+/* ====== PARSE DA PLANILHA NO BROWSER (como parseFileToRows) ====== */
+function parseWorkbookToRows(wb: XLSX.WorkBook): Row[] {
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  if (!ws) return [];
+  const rows: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: null });
+  const mapped: Row[] = [];
+
+  for (let i = 1; i < rows.length; i++) {
+    const r = rows[i] || [];
+    const conferente = normStr(r[COL.AH]);
+    const dataCell = r[COL.AI];
+    const cidadeAddr = r[COL.W];
+    const qtdpedidos = r[COL.G] ?? 0;
+    const qtditens = r[COL.J] ?? 0;
+
+    const datahora = toDateFlexible(dataCell);
+    const datadia = onlyDate(datahora);
+
+    const row: Row = {
+      conferente,
+      cidade: extractCity(cidadeAddr),
+      qtdpedidos: Number(qtdpedidos) || 0,
+      qtditens: Number(qtditens) || 0,
+      datahora,
+      datadia
+    };
+
+    // filtra linhas totalmente vazias
+    if (row.conferente || row.qtdpedidos || row.qtditens || row.datahora) {
+      mapped.push(row);
+    }
+  }
+
+  return mapped;
+}
+
+/* ====== AGREGAÇÕES (igual /api/stats, só que no front) ====== */
+type StatsResult = {
+  totals: {
+    totalPedidos: number;
+    totalItens: number;
+    jornadaTotal: number;
+    pedidosHoraGeral: number;
+  };
+  charts: {
+    pedidosPorConferente: { conferente: string; pedidos: number }[];
+    itensPorConferente: { conferente: string; itens: number }[];
+    jornadaPorConferente: { conferente: string; horas: number }[];
+    pedidosHoraPorConferente: { conferente: string; pedidos_hora: number }[];
+    pedidosPorCidade: { cidade: string; pedidos: number }[];
+  };
+  filters: {
+    cidades: string[];
+    conferentes: string[];
+  };
+};
+
+function buildStats(allRows: Row[], filteredRows: Row[]): StatsResult {
+  let totalPedidos = 0;
+  let totalItens = 0;
+
+  const somaPedidosPorConf = new Map<string, number>();
+  const somaItensPorConf = new Map<string, number>();
+  const somaPedidosPorCidade = new Map<string, number>();
+
+  const jornadaPorDiaConf = new Map<string, { min: number; max: number }>();
+
+  for (const r of filteredRows) {
+    const conf = (r.conferente ?? '—').trim();
+    const cid = (r.cidade ?? '—').trim();
+    const itens = Number(r.qtditens ?? 0);
+
+    // pedidos com fallback (se não veio qtdpedidos mas tem itens, conta 1)
+    const qtd = Number(r.qtdpedidos);
+    const pedidosEff = Number.isFinite(qtd) && qtd > 0 ? qtd : itens > 0 ? 1 : 0;
+
+    totalPedidos += pedidosEff;
+    totalItens += itens;
+
+    somaPedidosPorConf.set(conf, (somaPedidosPorConf.get(conf) ?? 0) + pedidosEff);
+    somaItensPorConf.set(conf, (somaItensPorConf.get(conf) ?? 0) + itens);
+    somaPedidosPorCidade.set(cid, (somaPedidosPorCidade.get(cid) ?? 0) + pedidosEff);
+
+    // jornada: min/max hora por (dia, conferente)
+    if (r.datadia && r.datahora) {
+      const diaStr = r.datadia.toISOString().slice(0, 10);
+      const key = `${conf}__${diaStr}`;
+      const ts = r.datahora.getTime();
+      const cur = jornadaPorDiaConf.get(key);
+      if (!cur) {
+        jornadaPorDiaConf.set(key, { min: ts, max: ts });
+      } else {
+        if (ts < cur.min) cur.min = ts;
+        if (ts > cur.max) cur.max = ts;
+      }
+    }
+  }
+
+  // soma das horas por conferente
+  const somaHorasPorConf = new Map<string, number>();
+  for (const [key, mm] of jornadaPorDiaConf.entries()) {
+    const [conf] = key.split('__');
+    const horasDia = Math.max(0, (mm.max - mm.min) / 3_600_000);
+    somaHorasPorConf.set(conf, (somaHorasPorConf.get(conf) ?? 0) + horasDia);
+  }
+
+  const pedidosPorConferente = Array.from(somaPedidosPorConf.entries())
+    .map(([conferente, pedidos]) => ({ conferente, pedidos }))
+    .sort((a, b) => b.pedidos - a.pedidos);
+
+  const itensPorConferente = Array.from(somaItensPorConf.entries())
+    .map(([conferente, itens]) => ({ conferente, itens }))
+    .sort((a, b) => b.itens - a.itens);
+
+  const jornadaPorConferente = Array.from(somaHorasPorConf.entries())
+    .map(([conferente, horas]) => ({ conferente, horas: Number(horas.toFixed(2)) }))
+    .sort((a, b) => (b.horas ?? 0) - (a.horas ?? 0));
+
+  const pedidosHoraPorConferente = pedidosPorConferente
+    .map((p) => {
+      const horas = somaHorasPorConf.get(p.conferente) ?? 0;
+      const pedidos_hora = horas > 0 ? p.pedidos / horas : 0;
+      return { conferente: p.conferente, pedidos_hora: Number(pedidos_hora.toFixed(2)) };
+    })
+    .sort((a, b) => b.pedidos_hora - a.pedidos_hora);
+
+  const pedidosPorCidade = Array.from(somaPedidosPorCidade.entries())
+    .map(([cidade, pedidos]) => ({ cidade, pedidos }))
+    .sort((a, b) => b.pedidos - a.pedidos);
+
+  // filtros: distinct de todas as linhas carregadas (não só filtradas)
+  const cidades = Array.from(
+    new Set(allRows.map((r) => (r.cidade ? String(r.cidade) : '—')))
+  ).sort();
+  const conferentes = Array.from(
+    new Set(allRows.map((r) => (r.conferente ? String(r.conferente) : '—')))
+  ).sort();
+
+  const jornadaTotal = Array.from(somaHorasPorConf.values()).reduce(
+    (a, b) => a + (b ?? 0),
+    0
+  );
+  const pedidosHoraGeral =
+    jornadaTotal > 0 ? Number((totalPedidos / jornadaTotal).toFixed(2)) : 0;
+
+  return {
+    totals: {
+      totalPedidos,
+      totalItens,
+      jornadaTotal: Number(jornadaTotal.toFixed(2)),
+      pedidosHoraGeral
+    },
+    charts: {
+      pedidosPorConferente,
+      itensPorConferente,
+      jornadaPorConferente,
+      pedidosHoraPorConferente,
+      pedidosPorCidade
+    },
+    filters: {
+      cidades,
+      conferentes
+    }
+  };
+}
+
+/* =============== PAGE =============== */
 
 export default function DashboardPage() {
   const router = useRouter();
-  const [data, setData] = useState<any>(null);
+
+  // linhas brutas da planilha
+  const [allRows, setAllRows] = useState<Row[]>([]);
+
+  // dados agregados para os cards/gráficos
+  const [data, setData] = useState<StatsResult | null>(null);
+
+  // estados de UI
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState('');
   const [from, setFrom] = useState('');
@@ -26,7 +285,9 @@ export default function DashboardPage() {
   const [conferente, setConferente] = useState('');
   const [topN, setTopN] = useState(5);
 
-  // Responsividade: detecta viewport < md (768px)
+  const fileRef = useRef<HTMLInputElement | null>(null);
+
+  // Responsividade
   const [isMobile, setIsMobile] = useState(false);
   useEffect(() => {
     const check = () => setIsMobile(window.innerWidth < 768);
@@ -35,41 +296,96 @@ export default function DashboardPage() {
     return () => window.removeEventListener('resize', check);
   }, []);
 
-  const load = async () => {
+  // Quando filtros mudam OU novas linhas são carregadas, recalcula as stats
+  useEffect(() => {
+    if (!allRows.length) {
+      setData(null);
+      return;
+    }
+
+    // filtra por período/cidade/conferente
+    const filtered = allRows.filter((r) => {
+      let ok = true;
+
+      if (from) {
+        const dFrom = new Date(`${from}T00:00:00`);
+        if (!r.datadia || r.datadia < dFrom) ok = false;
+      }
+      if (to) {
+        const dTo = new Date(`${to}T23:59:59.999`);
+        if (!r.datadia || r.datadia > dTo) ok = false;
+      }
+      if (cidade) {
+        const cid = (r.cidade ?? '—').trim();
+        if (cid !== cidade) ok = false;
+      }
+      if (conferente) {
+        const conf = (r.conferente ?? '—').trim();
+        if (conf !== conferente) ok = false;
+      }
+
+      return ok;
+    });
+
+    const stats = buildStats(allRows, filtered);
+    setData(stats);
+    setErr('');
+  }, [allRows, from, to, cidade, conferente]);
+
+  /* ====== Upload local (igual estoque) ====== */
+  async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setErr('');
+    setLoading(true);
+
     try {
-      setLoading(true);
-      const qs = new URLSearchParams({ from, to, cidade, conferente }).toString();
-      const res = await fetch(`/api/stats?${qs}`);
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error || 'Erro ao carregar');
-      setData(json);
-      setErr('');
-    } catch (e: any) {
-      setErr(e.message);
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(buf, { type: 'array' });
+      const rows = parseWorkbookToRows(wb);
+      if (!rows.length) {
+        setErr('Não encontrei linhas válidas na planilha.');
+        setAllRows([]);
+      } else {
+        setAllRows(rows);
+      }
+    } catch (error: any) {
+      console.error(error);
+      setErr(error?.message || 'Erro ao ler a planilha');
+      setAllRows([]);
     } finally {
       setLoading(false);
+      if (fileRef.current) fileRef.current.value = '';
     }
-  };
+  }
 
-  // auto-reload quando filtros mudarem (com debounce)
-  useEffect(() => {
-    const t = setTimeout(() => {
-      load();
-    }, 300);
-    return () => clearTimeout(t);
-  }, [from, to, cidade, conferente]);
+  const safeArray = (x: any) => (Array.isArray(x) ? x : []);
 
-  const safe = (x: any) => (Array.isArray(x) ? x : []);
-  const fmt2 = (x: any) => (x ? x.toLocaleString('pt-BR') : '0');
+  const fmt2 = (x: any) => (x !== null && x !== undefined ? Number(x).toLocaleString('pt-BR') : '0');
 
-  const pedidosConf = useMemo(() => safe(data?.charts?.pedidosPorConferente).slice(0, topN), [data, topN]);
-  const itensConf = useMemo(() => safe(data?.charts?.itensPorConferente).slice(0, topN), [data, topN]);
-  const jornadaConf = useMemo(() => safe(data?.charts?.jornadaPorConferente).slice(0, topN), [data, topN]);
-  const pedidosHoraConf = useMemo(() => safe(data?.charts?.pedidosHoraPorConferente).slice(0, topN), [data, topN]);
-  const pedidosCidade = useMemo(() => safe(data?.charts?.pedidosPorCidade).slice(0, topN), [data, topN]);
+  const pedidosConf = useMemo(
+    () => safeArray(data?.charts?.pedidosPorConferente).slice(0, topN),
+    [data, topN]
+  );
+  const itensConf = useMemo(
+    () => safeArray(data?.charts?.itensPorConferente).slice(0, topN),
+    [data, topN]
+  );
+  const jornadaConf = useMemo(
+    () => safeArray(data?.charts?.jornadaPorConferente).slice(0, topN),
+    [data, topN]
+  );
+  const pedidosHoraConf = useMemo(
+    () => safeArray(data?.charts?.pedidosHoraPorConferente).slice(0, topN),
+    [data, topN]
+  );
+  const pedidosCidade = useMemo(
+    () => safeArray(data?.charts?.pedidosPorCidade).slice(0, topN),
+    [data, topN]
+  );
 
-  const cities = safe(data?.filters?.cidades);
-  const conferentes = safe(data?.filters?.conferentes);
+  const cities = safeArray(data?.filters?.cidades);
+  const conferentes = safeArray(data?.filters?.conferentes);
 
   return (
     <main className="max-w-7xl mx-auto p-4 md:p-6">
@@ -103,16 +419,20 @@ export default function DashboardPage() {
             ))}
           </select>
 
-          {/* Botão Upload */}
-          <button
-            onClick={() => (window.location.href = '/area/upload')}
-            className="flex items-center gap-2 px-3 md:px-4 py-2 rounded bg-emerald-500 hover:bg-emerald-600 transition font-semibold text-white text-sm md:text-base"
-          >
+          {/* Upload local da planilha de conferência */}
+          <label className="flex items-center gap-2 px-3 md:px-4 py-2 rounded bg-emerald-500 hover:bg-emerald-600 transition font-semibold text-white text-sm md:text-base cursor-pointer">
             <Upload size={18} />
-            Upload
-          </button>
+            Upload local
+            <input
+              ref={fileRef}
+              type="file"
+              accept=".xlsx,.xls,.csv"
+              className="hidden"
+              onChange={handleFileChange}
+            />
+          </label>
 
-          {/* 🔵 Botão Estoque → /dashboard-estoque */}
+          {/* Botão Estoque → /dashboard-estoque */}
           <button
             onClick={() => router.push('/dashboard-estoque')}
             className="flex items-center gap-2 px-3 md:px-4 py-2 rounded bg-sky-500 hover:bg-sky-600 transition font-semibold text-white text-sm md:text-base"
@@ -147,7 +467,13 @@ export default function DashboardPage() {
         <Filter label="Período (De)" type="date" value={from} onChange={setFrom} />
         <Filter label="Período (Até)" type="date" value={to} onChange={setTo} />
         <Select label="Cidade" value={cidade} onChange={setCidade} options={cities} placeholder="Todas" />
-        <Select label="Conferente" value={conferente} onChange={setConferente} options={conferentes} placeholder="Todos" />
+        <Select
+          label="Conferente"
+          value={conferente}
+          onChange={setConferente}
+          options={conferentes}
+          placeholder="Todos"
+        />
         <div className="flex items-end">
           <button
             onClick={() => {
@@ -170,65 +496,83 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* Cards de Totais */}
-      <motion.div
-        initial={{ opacity: 0, y: 10 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.3, duration: 0.8 }}
-        className="mt-4 grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4"
-      >
-        <InfoCard title="Total de Pedidos" value={fmt2(data?.totals?.totalPedidos)} color="#3b82f6" />
-        <InfoCard title="Total de Itens" value={fmt2(data?.totals?.totalItens)} color="#22c55e" />
-        <InfoCard title="Jornada Total (h)" value={fmt2(data?.totals?.jornadaTotal)} color="#f59e0b" />
-        <InfoCard title="Pedidos/Hora (geral)" value={fmt2(data?.totals?.pedidosHoraGeral)} color="#8b5cf6" />
-      </motion.div>
-
-      {/* Gráficos */}
-      <div className="mt-6 grid grid-cols-1 xl:grid-cols-2 gap-4 md:gap-6">
-        <AnimatedChart
-          title="Pedidos por Conferente"
-          data={pedidosConf}
-          color="#3b82f6"
-          dataKey="pedidos"
-          label="pedidos"
-          isMobile={isMobile}
-        />
-        <AnimatedChart
-          title="Itens por Conferente"
-          data={itensConf}
-          color="#22c55e"
-          dataKey="itens"
-          label="itens"
-          isMobile={isMobile}
-        />
-        <AnimatedChart
-          title="Jornada (horas) por Conferente"
-          data={jornadaConf}
-          color="#f59e0b"
-          dataKey="horas"
-          label="horas"
-          isMobile={isMobile}
-        />
-        <AnimatedChart
-          title="Pedidos por Hora por Conferente"
-          data={pedidosHoraConf}
-          color="#8b5cf6"
-          dataKey="pedidos_hora"
-          label="pedidos_hora"
-          isMobile={isMobile}
-        />
-
-        <div className="xl:col-span-2">
-          <AnimatedChart
-            title="Pedidos por Cidade"
-            data={pedidosCidade}
-            color="#ec4899"
-            dataKey="pedidos"
-            label="Cidades"
-            isMobile={isMobile}
-          />
+      {/* Loading simples */}
+      {loading && (
+        <div className="mt-4 rounded-xl border border-blue-500/30 bg-blue-500/10 p-3 text-blue-200 text-sm">
+          Processando planilha...
         </div>
-      </div>
+      )}
+
+      {/* Aviso se nenhum dado */}
+      {!loading && !err && !allRows.length && (
+        <div className="mt-6 rounded-xl border border-white/10 bg-white/5 p-4 text-sm text-white/80">
+          Selecione um arquivo XLSX/CSV de conferência para carregar os dados.
+        </div>
+      )}
+
+      {/* Cards de Totais */}
+      {data && (
+        <>
+          <motion.div
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.3, duration: 0.8 }}
+            className="mt-4 grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4"
+          >
+            <InfoCard title="Total de Pedidos" value={fmt2(data.totals.totalPedidos)} color="#3b82f6" />
+            <InfoCard title="Total de Itens" value={fmt2(data.totals.totalItens)} color="#22c55e" />
+            <InfoCard title="Jornada Total (h)" value={fmt2(data.totals.jornadaTotal)} color="#f59e0b" />
+            <InfoCard title="Pedidos/Hora (geral)" value={fmt2(data.totals.pedidosHoraGeral)} color="#8b5cf6" />
+          </motion.div>
+
+          {/* Gráficos */}
+          <div className="mt-6 grid grid-cols-1 xl:grid-cols-2 gap-4 md:gap-6">
+            <AnimatedChart
+              title="Pedidos por Conferente"
+              data={pedidosConf}
+              color="#3b82f6"
+              dataKey="pedidos"
+              label="pedidos"
+              isMobile={isMobile}
+            />
+            <AnimatedChart
+              title="Itens por Conferente"
+              data={itensConf}
+              color="#22c55e"
+              dataKey="itens"
+              label="itens"
+              isMobile={isMobile}
+            />
+            <AnimatedChart
+              title="Jornada (horas) por Conferente"
+              data={jornadaConf}
+              color="#f59e0b"
+              dataKey="horas"
+              label="horas"
+              isMobile={isMobile}
+            />
+            <AnimatedChart
+              title="Pedidos por Hora por Conferente"
+              data={pedidosHoraConf}
+              color="#8b5cf6"
+              dataKey="pedidos_hora"
+              label="pedidos_hora"
+              isMobile={isMobile}
+            />
+
+            <div className="xl:col-span-2">
+              <AnimatedChart
+                title="Pedidos por Cidade"
+                data={pedidosCidade}
+                color="#ec4899"
+                dataKey="pedidos"
+                label="Cidades"
+                isMobile={isMobile}
+              />
+            </div>
+          </div>
+        </>
+      )}
     </main>
   );
 }
@@ -289,11 +633,7 @@ function Chart({ data, color, dataKey, label, isMobile }: any) {
           tick={{ fontSize: isMobile ? 10 : 12 }}
         />
         <Tooltip />
-        <Legend
-          verticalAlign="bottom"
-          wrapperStyle={{ bottom: 4 }}
-          formatter={() => label}
-        />
+        <Legend verticalAlign="bottom" wrapperStyle={{ bottom: 4 }} formatter={() => label} />
         <Bar dataKey={dataKey} fill={color} animationDuration={800}>
           <LabelList
             dataKey={dataKey}
@@ -345,7 +685,9 @@ function Select({ label, value, onChange, options, placeholder }: any) {
         onChange={(e) => onChange(e.target.value)}
         className="bg-white/10 border border-white/10 rounded px-2 py-2 text-white"
       >
-        <option value="" className="text-black">{placeholder}</option>
+        <option value="" className="text-black">
+          {placeholder}
+        </option>
         {options.map((o: any) => (
           <option key={String(o)} value={String(o)} className="text-black">
             {String(o)}
