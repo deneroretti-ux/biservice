@@ -24,6 +24,144 @@ import {
 
 type MsgState = { ok: boolean; text: string } | null;
 
+/* ========= HELPERS PARA CONFERÊNCIA (APENAS PARA O DASHBOARD) ========= */
+
+type ConfRow = {
+  conferente: string | null;
+  cidade: string | null;
+  datadia: Date | null;
+  datahora: Date | null;
+  qtdpedidos: number;
+  qtditens: number;
+};
+
+// Mesmos helpers de data usados no dashboard/conferência
+function excelSerialToDate(n: number): Date | null {
+  if (!isFinite(n)) return null;
+  const ms = (n - 25569) * 86400 * 1000;
+  const d = new Date(ms);
+  return isNaN(+d) ? null : d;
+}
+function parsePtBrDate(s: string): Date | null {
+  const m = s.match(
+    /^(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{2,4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?$/
+  );
+  if (!m) return null;
+  const dd = +m[1];
+  const MM = +m[2] - 1;
+  const yyyy = +(m[3].length === 2 ? '20' + m[3] : m[3]);
+  const hh = m[4] ? +m[4] : 0;
+  const mm = m[5] ? +m[5] : 0;
+  const ss = m[6] ? +m[6] : 0;
+  const d = new Date(yyyy, MM, dd, hh, mm, ss);
+  return isNaN(+d) ? null : d;
+}
+function parseIsoOrUs(s: string): Date | null {
+  const d1 = new Date(s);
+  if (!isNaN(+d1)) return d1;
+  const m = s.match(/^(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{2,4})$/);
+  if (m) {
+    const MM = +m[1] - 1;
+    const dd = +m[2];
+    const yyyy = +(m[3].length === 2 ? '20' + m[3] : m[3]);
+    const d2 = new Date(yyyy, MM, dd);
+    if (!isNaN(+d2)) return d2;
+  }
+  return null;
+}
+function toDateFlexible(v: any): Date | null {
+  if (v == null || v === '') return null;
+  if (typeof v === 'number') return excelSerialToDate(v);
+  if (v instanceof Date) return isNaN(+v) ? null : v;
+  return parsePtBrDate(String(v).trim()) || parseIsoOrUs(String(v).trim()) || null;
+}
+function onlyDate(d: Date | null): Date | null {
+  if (!d) return null;
+  const x = new Date(d);
+  x.setHours(0, 0, 0, 0);
+  return x;
+}
+function normStr(v: any): string | null {
+  if (v === undefined || v === null) return null;
+  const s = String(v).trim();
+  return s.length ? s : null;
+}
+function extractCity(addr: any): string | null {
+  const s = normStr(addr);
+  if (!s) return null;
+  const m = s.match(/\s-\s*([A-ZÁ-Ü\s]+?)\s-\s*[A-Z]{2}\s*$/i);
+  if (m && m[1]) return m[1].toString().trim().toUpperCase();
+  const parts = s.split(' - ').map((p) => p.trim());
+  if (parts.length >= 2) {
+    const penultimo = parts[parts.length - 2];
+    if (penultimo) return penultimo.toUpperCase();
+  }
+  const tokens = s.split(/[,/;-]/).map((p) => p.trim()).filter(Boolean);
+  return tokens.length ? tokens[tokens.length - 1].toUpperCase() : null;
+}
+
+// mesmas colunas usadas no backend/dashboard conferência
+const CONF_COL = { G: 6, J: 9, W: 22, AH: 33, AI: 34 } as const;
+
+/**
+ * Lê o arquivo de CONFERÊNCIA no client, extrai as linhas
+ * e salva em localStorage.conferenciaRows
+ * para o dashboard de conferência usar.
+ */
+async function processConferenciaFileAndStore(file: File) {
+  const buf = await file.arrayBuffer();
+  const wb = XLSX.read(buf, { type: 'array' });
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  if (!ws) return;
+
+  const rows: any[][] = XLSX.utils.sheet_to_json(ws, {
+    header: 1,
+    raw: true,
+    defval: null,
+  });
+
+  const mapped: ConfRow[] = [];
+
+  for (let i = 1; i < rows.length; i++) {
+    const r = rows[i] || [];
+    const conferente = normStr(r[CONF_COL.AH]);
+    const dataCell = r[CONF_COL.AI];
+    const cidadeAddr = r[CONF_COL.W];
+    const qtdpedidos = r[CONF_COL.G] ?? 0;
+    const qtditens = r[CONF_COL.J] ?? 0;
+
+    const datahora = toDateFlexible(dataCell);
+    const datadia = onlyDate(datahora);
+
+    const row: ConfRow = {
+      conferente,
+      cidade: extractCity(cidadeAddr),
+      qtdpedidos: Number(qtdpedidos) || 0,
+      qtditens: Number(qtditens) || 0,
+      datahora,
+      datadia,
+    };
+
+    if (row.conferente || row.qtdpedidos || row.qtditens || row.datahora) {
+      mapped.push(row);
+    }
+  }
+
+  if (!mapped.length) return;
+
+  const serializable = mapped.map((r) => ({
+    ...r,
+    datadia: r.datadia ? r.datadia.toISOString() : null,
+    datahora: r.datahora ? r.datahora.toISOString() : null,
+  }));
+
+  if (typeof window !== 'undefined') {
+    localStorage.setItem('conferenciaRows', JSON.stringify(serializable));
+  }
+}
+
+/* ========= COMPONENTE PRINCIPAL ========= */
+
 export default function UploadPage() {
   const router = useRouter();
 
@@ -67,6 +205,13 @@ export default function UploadPage() {
     setStartedAtConf(Date.now());
 
     try {
+      // 🔹 Já prepara os dados pro dashboard de conferência (localStorage)
+      try {
+        await processConferenciaFileAndStore(confFile);
+      } catch (err) {
+        console.error('Erro ao processar conferência para dashboard:', err);
+      }
+
       const token = localStorage.getItem('token') || '';
       const fd = new FormData();
       fd.append('tenant', 'Default');
@@ -99,6 +244,7 @@ export default function UploadPage() {
         if (xhr.readyState === 4) {
           if (xhr.status >= 200 && xhr.status < 300) {
             setMsgConf({ ok: true, text: 'Upload concluído com sucesso!' });
+            // (opcional) aqui já está pronto para o dashboard ler do localStorage
           } else {
             setMsgConf({
               ok: false,
@@ -123,7 +269,7 @@ export default function UploadPage() {
     }
   }
 
-  // ========= HANDLERS ESTOQUE =========
+  // ========= HANDLERS ESTOQUE (NÃO MEXI EM NADA) =========
   function onPickEstoqueFile(e: React.ChangeEvent<HTMLInputElement>) {
     const f = e.target.files?.[0];
     if (f) setEstoqueFile(f);
@@ -345,7 +491,7 @@ export default function UploadPage() {
           </div>
         </motion.div>
 
-        {/* CARD 2 – ESTOQUE */}
+        {/* CARD 2 – ESTOQUE (INTACTO) */}
         <motion.div
           className="rounded-2xl border border-white/10 bg-white/5 p-4 md:p-6"
           initial={{ opacity: 0, y: 10 }}
