@@ -47,7 +47,7 @@ type StatsResult = {
   };
 };
 
-/* ====== HELPERS (mesmos do backend) ====== */
+/* ====== HELPERS DE DATA / STRING ====== */
 function excelSerialToDate(n: number): Date | null {
   if (!isFinite(n)) return null;
   const ms = (n - 25569) * 86400 * 1000;
@@ -112,10 +112,10 @@ function extractCity(addr: any): string | null {
   return tokens.length ? tokens[tokens.length - 1].toUpperCase() : null;
 }
 
-/* Mesmas colunas usadas no backend/api/upload */
+/* mesmas colunas do backend */
 const COL = { G: 6, J: 9, W: 22, AH: 33, AI: 34 } as const;
 
-/* ====== PARSE DO XLSX NO CLIENTE ====== */
+/* ====== PARSE XLSX NO CLIENT ====== */
 function parseWorkbookToRows(wb: XLSX.WorkBook): Row[] {
   const ws = wb.Sheets[wb.SheetNames[0]];
   if (!ws) return [];
@@ -274,7 +274,7 @@ export default function DashboardPage() {
   const fileRef = useRef<HTMLInputElement | null>(null);
   const [isMobile, setIsMobile] = useState(false);
 
-  // 🔹 1) Carrega dados que vieram da página /area/upload (localStorage)
+  // 🔹 pega dados vindos da /area/upload (localStorage.conferenciaRows)
   useEffect(() => {
     if (typeof window === 'undefined') return;
     if (allRows.length) return;
@@ -309,7 +309,7 @@ export default function DashboardPage() {
     return () => window.removeEventListener('resize', check);
   }, []);
 
-  // Recalcula stats quando filtros/linhas mudam
+  // Recalcula stats
   useEffect(() => {
     if (!allRows.length) {
       setData(null);
@@ -344,7 +344,7 @@ export default function DashboardPage() {
     setErr('');
   }, [allRows, from, to, cidade, conferente]);
 
-  /* ====== Upload local direto no dashboard (continua funcionando) ====== */
+  /* ====== Upload local direto no dashboard ====== */
   async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -439,7 +439,7 @@ export default function DashboardPage() {
             ))}
           </select>
 
-          {/* Upload local (não mexe no fluxo de estoque) */}
+          {/* Upload local (NÃO mexe no fluxo de estoque) */}
           <label className="flex items-center gap-2 px-3 md:px-4 py-2 rounded bg-emerald-500 hover:bg-emerald-600 transition font-semibold text-white text-sm md:text-base cursor-pointer">
             <Upload size={18} />
             Upload local

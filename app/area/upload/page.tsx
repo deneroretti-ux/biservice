@@ -13,7 +13,6 @@ import {
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 
-// helpers do bloco BOTI / Estoque
 import {
   readFileWithProgress,
   fetchPdvCityMap,
@@ -24,7 +23,7 @@ import {
 
 type MsgState = { ok: boolean; text: string } | null;
 
-/* ========= HELPERS PARA CONFERÊNCIA (APENAS PARA O DASHBOARD) ========= */
+/* ========= HELPERS PARA CONFERÊNCIA ========= */
 
 type ConfRow = {
   conferente: string | null;
@@ -35,7 +34,6 @@ type ConfRow = {
   qtditens: number;
 };
 
-// Mesmos helpers de data usados no dashboard/conferência
 function excelSerialToDate(n: number): Date | null {
   if (!isFinite(n)) return null;
   const ms = (n - 25569) * 86400 * 1000;
@@ -100,14 +98,8 @@ function extractCity(addr: any): string | null {
   return tokens.length ? tokens[tokens.length - 1].toUpperCase() : null;
 }
 
-// mesmas colunas usadas no backend/dashboard conferência
 const CONF_COL = { G: 6, J: 9, W: 22, AH: 33, AI: 34 } as const;
 
-/**
- * Lê o arquivo de CONFERÊNCIA no client, extrai as linhas
- * e salva em localStorage.conferenciaRows
- * para o dashboard de conferência usar.
- */
 async function processConferenciaFileAndStore(file: File) {
   const buf = await file.arrayBuffer();
   const wb = XLSX.read(buf, { type: 'array' });
@@ -165,7 +157,7 @@ async function processConferenciaFileAndStore(file: File) {
 export default function UploadPage() {
   const router = useRouter();
 
-  // ====== UPLOAD CONFERÊNCIA (API /api/upload) ======
+  // conferência
   const confInputRef = useRef<HTMLInputElement | null>(null);
   const [confFile, setConfFile] = useState<File | null>(null);
   const [sendingConf, setSendingConf] = useState(false);
@@ -174,20 +166,19 @@ export default function UploadPage() {
   const [startedAtConf, setStartedAtConf] = useState<number | null>(null);
   const [msgConf, setMsgConf] = useState<MsgState>(null);
 
-  // ====== UPLOAD ESTOQUE ======
+  // estoque
   const estoqueInputRef = useRef<HTMLInputElement | null>(null);
   const [estoqueFile, setEstoqueFile] = useState<File | null>(null);
   const [sendingEstoque, setSendingEstoque] = useState(false);
   const [progressEstoque, setProgressEstoque] = useState(0);
   const [msgEstoque, setMsgEstoque] = useState<MsgState>(null);
 
-  // bloqueia acesso sem token
   useEffect(() => {
     const t = localStorage.getItem('token');
     if (!t) router.replace('/login');
   }, [router]);
 
-  // ========= HANDLERS CONFERÊNCIA =========
+  /* ==== CONFERÊNCIA ==== */
   function onPickConfFile(e: React.ChangeEvent<HTMLInputElement>) {
     const f = e.target.files?.[0];
     if (f) setConfFile(f);
@@ -205,7 +196,7 @@ export default function UploadPage() {
     setStartedAtConf(Date.now());
 
     try {
-      // 🔹 Já prepara os dados pro dashboard de conferência (localStorage)
+      // prepara dados pro dashboard (localStorage)
       try {
         await processConferenciaFileAndStore(confFile);
       } catch (err) {
@@ -228,7 +219,7 @@ export default function UploadPage() {
 
           if (startedAtConf && e.loaded > 0) {
             const elapsed = (Date.now() - startedAtConf) / 1000;
-            const rate = e.loaded / elapsed; // bytes/s
+            const rate = e.loaded / elapsed;
             const remaining = e.total - e.loaded;
             const seconds = remaining / (rate || 1);
             if (isFinite(seconds)) {
@@ -244,7 +235,6 @@ export default function UploadPage() {
         if (xhr.readyState === 4) {
           if (xhr.status >= 200 && xhr.status < 300) {
             setMsgConf({ ok: true, text: 'Upload concluído com sucesso!' });
-            // (opcional) aqui já está pronto para o dashboard ler do localStorage
           } else {
             setMsgConf({
               ok: false,
@@ -269,7 +259,7 @@ export default function UploadPage() {
     }
   }
 
-  // ========= HANDLERS ESTOQUE (NÃO MEXI EM NADA) =========
+  /* ==== ESTOQUE – msm lógica que já usava ==== */
   function onPickEstoqueFile(e: React.ChangeEvent<HTMLInputElement>) {
     const f = e.target.files?.[0];
     if (f) setEstoqueFile(f);
@@ -298,10 +288,8 @@ export default function UploadPage() {
 
       const payload = { estoque: estoqueAll, vendas: vendasAll };
 
-      // mantém a gravação via helper (caso use em outro lugar)
       saveSessionData(payload);
 
-      // ✅ guarda em memória global, sem limite de tamanho
       if (typeof window !== 'undefined') {
         (window as any).__BI_BOTI_DATA__ = payload;
       }
@@ -377,7 +365,7 @@ export default function UploadPage() {
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.35 }}
         >
-          <h2 className="text-2xl md:text-3xl font-extrabold tracking-tight">
+          <h2 className="text-2xl md:3xl font-extrabold tracking-tight">
             <span className="text-white">Upload</span>{' '}
             <span className="text-blue-400">de Arquivos</span>
           </h2>
@@ -387,7 +375,7 @@ export default function UploadPage() {
           </p>
         </motion.div>
 
-        {/* CARD 1 – CONFERÊNCIA */}
+        {/* CARD CONFERÊNCIA */}
         <motion.div
           className="rounded-2xl border border-white/10 bg-white/5 p-4 md:p-6 mb-6"
           initial={{ opacity: 0, y: 10 }}
@@ -491,7 +479,7 @@ export default function UploadPage() {
           </div>
         </motion.div>
 
-        {/* CARD 2 – ESTOQUE (INTACTO) */}
+        {/* CARD ESTOQUE */}
         <motion.div
           className="rounded-2xl border border-white/10 bg-white/5 p-4 md:p-6"
           initial={{ opacity: 0, y: 10 }}
