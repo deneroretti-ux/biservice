@@ -514,31 +514,63 @@ export default function DashboardEstoquePage() {
     return { ciclo: best.Ciclo, qtd: best.QtdVendida };
   }, [cyclesForSku]);
 
-  const resumoFiltro = useMemo(() => {
-    let mediaFiltro = 0, maxFiltroQtd = 0, maxFiltroLabel = "";
-    if (selectedCycle === "Todos") {
-      mediaFiltro = media17; maxFiltroQtd = maxInfo.qtd || 0; maxFiltroLabel = maxInfo.ciclo || "-";
-    } else {
-      const base = (skuSel === "Todos")
-        ? salesRows.filter(r => r.Ciclo === selectedCycle)
-        : salesRows.filter(r => r.Ciclo === selectedCycle && r.CodigoProduto === skuSel);
-      const bySku = new Map();
-      for (const r of base) bySku.set(r.CodigoProduto, (bySku.get(r.CodigoProduto) || 0) + (r.QtdVendida || 0));
-      const arr = Array.from(bySku.values());
-      const total = arr.reduce((s,v)=>s+v,0);
-      const count = arr.length || 1;
-      mediaFiltro = total / count;
-      let bestSku = { sku:"", qtd:0 };
-      for (const [sku, qtd] of bySku.entries()) if (qtd > bestSku.qtd) bestSku = { sku, qtd };
-      maxFiltroQtd = bestSku.qtd || 0;
-      maxFiltroLabel = bestSku.sku ? `SKU ${bestSku.sku}` : "-";
+const resumoFiltro = useMemo(() => {
+  let mediaFiltro = 0, maxFiltroQtd = 0, maxFiltroLabel = "";
+
+  if (selectedCycle === "Todos") {
+    mediaFiltro = media17;
+    maxFiltroQtd = maxInfo.qtd || 0;
+    maxFiltroLabel = maxInfo.ciclo || "-";
+  } else {
+    const base = (skuSel === "Todos")
+      ? salesRows.filter(r => r.Ciclo === selectedCycle)
+      : salesRows.filter(r => r.Ciclo === selectedCycle && r.CodigoProduto === skuSel);
+
+    const bySku = new Map();
+    for (const r of base) {
+      bySku.set(
+        r.CodigoProduto,
+        (bySku.get(r.CodigoProduto) || 0) + (r.QtdVendida || 0)
+      );
     }
-    return {
-      mediaTexto: Number(mediaFiltro || 0).toLocaleString("pt-BR", { minimumFractionDigits: 0, maximumFractionDigits: 2 }),
-      maxQtdTexto: Number(maxFiltroQtd || 0).toLocaleString("pt-BR"),
-      maxLabel: maxFiltroLabel
-    };
-  }, [media17, maxInfo, selectedCycle, skuSel, salesRows]);
+
+    const arr = Array.from(bySku.values());
+    const total = arr.reduce((s, v) => s + v, 0);
+    const count = arr.length || 1;
+    mediaFiltro = total / count;
+
+    let bestSku = { sku: "", qtd: 0 };
+    for (const [sku, qtd] of bySku.entries()) {
+      if (qtd > bestSku.qtd) bestSku = { sku, qtd };
+    }
+
+    maxFiltroQtd = bestSku.qtd || 0;
+
+    // 🔹 Usa a DESCRIÇÃO do SKU (busca em rowsProcessed)
+    if (bestSku.sku) {
+      let desc = "";
+      for (const r of rowsProcessed) {
+        if (r.CodigoProduto === bestSku.sku && r.DescricaoProduto) {
+          desc = r.DescricaoProduto;
+          break;
+        }
+      }
+      maxFiltroLabel = desc || bestSku.sku;
+    } else {
+      maxFiltroLabel = "-";
+    }
+  }
+
+  return {
+    mediaTexto: Number(mediaFiltro || 0).toLocaleString("pt-BR", {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 2,
+    }),
+    maxQtdTexto: Number(maxFiltroQtd || 0).toLocaleString("pt-BR"),
+    maxLabel: maxFiltroLabel,
+  };
+}, [media17, maxInfo, selectedCycle, skuSel, salesRows, rowsProcessed]);
+
 
   /* ====== sku -> descrição ====== */
   const skuMeta = useMemo(() => {
