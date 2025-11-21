@@ -7,11 +7,22 @@ import {
   PieChart, Pie, Cell, ReferenceLine
 } from "recharts";
 import * as XLSX from "xlsx";
-import { useRouter } from "next/navigation"; // ⬅️ ADICIONADO
 
 /* ====== CONFIG ====== */
 const CYCLE_WINDOW = 17;
 const BRAND_OPTIONS = ["Todas", "BOTICARIO", "EUDORA", "QUEM DISSE BERENICE"];
+
+// 🔹 Filtro fixo de cidade/loja para VENDAS
+const SALES_CITY_OPTIONS = [
+  "Todas",
+  "BEBEDOURO CENTRO",
+  "BEBEDOURO SHOP",
+  "BEBEDOURO VD",
+  "COLINA",
+  "MONTE AZUL PAULISTA",
+  "PITANGUEIRAS",
+  "VIRADOURO",
+];
 
 /* ====== PALETA ====== */
 const C_BLUE = "#3b82f6";
@@ -93,12 +104,16 @@ function Card({ title, borderColor = C_CARD_BORDER, children, right = null }) {
     </section>
   );
 }
-function Kpi({ title, value, color = C_BLUE, raw = false }) {
+function Kpi({ title, value, color = C_BLUE, raw = false, size = "lg" }) {
   const display = raw ? String(value ?? "") : Number(value || 0).toLocaleString("pt-BR");
+  const sizeClass =
+    size === "sm" ? "text-base" :
+    size === "md" ? "text-2xl" :
+    "text-3xl";
   return (
     <div className="rounded-2xl p-4" style={{ border:`1px solid ${C_CARD_BORDER}`, background:C_CARD_BG }}>
       <p className="text-xs text-white/70">{title}</p>
-      <p className="text-3xl font-extrabold mt-1" style={{ color }}>{display}</p>
+      <p className={`${sizeClass} font-extrabold mt-1`} style={{ color }}>{display}</p>
     </div>
   );
 }
@@ -110,11 +125,15 @@ function SelectDark({ label, value, onChange, options, className = "" }) {
         <select value={value} onChange={onChange}
           className="w-full appearance-none rounded-lg border border-white/10 bg-[#0f172a] px-3 py-2 text-sm text-white pr-9"
           style={{ colorScheme:"dark" }}>
-          {options.map((opt) => (
-            <option key={opt} value={opt} className="text-white" style={{ color:"#fff", backgroundColor:"#0f172a" }}>
-              {opt}
-            </option>
-          ))}
+          {options.map((opt) => {
+            const val = typeof opt === "string" ? opt : opt.value;
+            const labelText = typeof opt === "string" ? opt : opt.label;
+            return (
+              <option key={val} value={val} className="text-white" style={{ color:"#fff", backgroundColor:"#0f172a" }}>
+                {labelText}
+              </option>
+            );
+          })}
         </select>
         <svg className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 opacity-80" width="16" height="16" viewBox="0 0 24 24">
           <path fill="currentColor" d="M7 10l5 5l5-5z" />
@@ -126,8 +145,6 @@ function SelectDark({ label, value, onChange, options, className = "" }) {
 
 /* ====== PAGE ====== */
 export default function DashboardEstoquePage() {
-  const router = useRouter(); // ⬅️ ADICIONADO
-
   const [pdvMap, setPdvMap] = useState({});
   const [allRowsEstoque, setAllRowsEstoque] = useState([]);
   const [brandFilter, setBrandFilter] = useState("Todas");
@@ -141,7 +158,7 @@ export default function DashboardEstoquePage() {
   const [showPlanDetail, setShowPlanDetail] = useState(false);
   const fileRef = useRef(null);
 
-  // Loading/progress (caso ainda use upload interno)
+  // Loading/progress
   const [isLoading, setIsLoading] = useState(false);
   const [progress, setProgress] = useState(0);
   const [status, setStatus] = useState("");
@@ -154,6 +171,9 @@ export default function DashboardEstoquePage() {
   const [selectedCycle, setSelectedCycle] = useState("Todos");
   const [showCycleDetail, setShowCycleDetail] = useState(false);
 
+  // 🔹 filtro de cidade/loja para vendas
+  const [salesCityFilter, setSalesCityFilter] = useState("Todas");
+
   // Mínimo
   const [minMethod, setMinMethod] = useState("media17");
   const [covFactor, setCovFactor] = useState("1.0");
@@ -161,49 +181,11 @@ export default function DashboardEstoquePage() {
   // Plano
   const [planTab, setPlanTab] = useState("transfer");
   const [planCityFilter, setPlanCityFilter] = useState("Todas");
+  const [planCurveFilter, setPlanCurveFilter] = useState("Todas");
 
-  // 🔐 Protege a página: se não tiver token, manda pra /login
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const token = localStorage.getItem("token");
-    if (!token) {
-      router.replace("/login");
-    }
-  }, [router]);
-
-  // ========= NOVO: carrega dados em memória global vindos do upload =========
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-
-    const globalData = window.__BI_BOTI_DATA__;
-    if (!globalData || !globalData.estoque || !globalData.vendas) {
-      return;
-    }
-
-    setAllRowsEstoque(globalData.estoque || []);
-    setSalesRowsAll(globalData.vendas || []);
-    setBrandFilter("Todas");
-  }, []);
-
-  // Se ainda quiser manter a leitura do mapa de PDV
   useEffect(() => { (async () => setPdvMap(await fetchPdvCityMapLocal()))(); }, []);
 
-  // 🔴 Função de logout REAL
-  async function handleLogout() {
-    try {
-      await fetch("/api/auth/logout", { method: "POST" });
-    } catch (e) {
-      console.error("Erro ao chamar /api/auth/logout", e);
-    }
-
-    if (typeof window !== "undefined") {
-      localStorage.removeItem("token");
-    }
-
-    router.push("/login");
-  }
-
-  // Se alguém ainda usar upload direto na página (opcional)
+  // Upload local
   async function onUpload(e) {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -244,7 +226,7 @@ export default function DashboardEstoquePage() {
     }
   }
 
-  // ====== PARSE ESTOQUE (local, igual ao da página BOTI) ======
+  // ====== PARSE ESTOQUE (local) ======
   function computeFromWorkbookEstoqueLocal(wb, pdvCityMap) {
     const result = [];
     for (const sheetName of wb.SheetNames) {
@@ -267,6 +249,17 @@ export default function DashboardEstoquePage() {
       const pedidoPendCol   = findCol(["pedido pendente","pedido_pendente","pedidos pendentes","pedido aberto"]);
       let pdvCol = null; for (const rawKey in headerMap) if (headerMap[rawKey] === "pdv") { pdvCol = rawKey; break; }
 
+      // 🔹 nova coluna: Classe (curva do SKU, coluna B "Classe")
+      const classeCol = findCol([
+        "classe",
+        "classe sku",
+        "classe do sku",
+        "classe do produto",
+        "curva",
+        "curva sku",
+        "curva do produto"
+      ]);
+
       if (!skuCol) continue;
 
       const marca = brandFromSheetName(sheetName);
@@ -288,6 +281,10 @@ export default function DashboardEstoquePage() {
         const pend  = Number(r?.[pedidoPendCol] ?? 0) || 0;
         const pendLiquido = Math.max(pend - trans, 0);
 
+        const classe = classeCol
+          ? String(r?.[classeCol] ?? "").trim().toUpperCase()
+          : "";
+
         tmpRows.push({
           Marca: marca,
           Aba: sheetName,
@@ -295,6 +292,7 @@ export default function DashboardEstoquePage() {
           DescricaoProduto: desc,
           PDV: pdv,
           Cidade: cidade,
+          Classe: classe,
           EstoqueAtual: est,
           EstoqueTransito: trans,
           PedidosPendentes: pend,
@@ -315,7 +313,7 @@ export default function DashboardEstoquePage() {
     return result;
   }
 
-  // ====== PARSE VENDAS (local) ====== */
+  // ====== PARSE VENDAS (local) ======
   function extractSalesRowsAllLocal(wb, pdvCityMap) {
     const collected = [];
     for (const sheetName of wb.SheetNames) {
@@ -440,9 +438,19 @@ export default function DashboardEstoquePage() {
     setRowsProcessed(rows);
   }, [brandFilter, allRowsEstoque]);
 
+  // 🔹 filtro de LOJA nas vendas
   useEffect(() => {
-    const rows = brandFilter === "Todas" ? salesRowsAll : salesRowsAll.filter(r => r.Marca === brandFilter);
-    if (!rows.length) { setSalesRows([]); setSkuList([]); setSkuSel("Todos"); setSelectedCycle("Todos"); return; }
+    let rows = brandFilter === "Todas" ? salesRowsAll : salesRowsAll.filter(r => r.Marca === brandFilter);
+
+    if (salesCityFilter !== "Todas") {
+      const target = salesCityFilter.toUpperCase();
+      rows = rows.filter(r => (r.Cidade || "").toUpperCase() === target);
+    }
+
+    if (!rows.length) {
+      setSalesRows([]); setSkuList([]); setSkuSel("Todos"); setSelectedCycle("Todos");
+      return;
+    }
     const ciclosAll = Array.from(new Set(rows.map(r => r.Ciclo))).sort((a,b)=>cicloKey(a)-cicloKey(b));
     const lastN = ciclosAll.slice(-CYCLE_WINDOW);
     const filtered = rows.filter(r => lastN.includes(r.Ciclo));
@@ -450,7 +458,7 @@ export default function DashboardEstoquePage() {
     const skus = Array.from(new Set(filtered.map(r => r.CodigoProduto))).sort((a,b)=>a.localeCompare(b));
     setSkuList(["Todos", ...skus]);
     setSkuSel("Todos"); setSelectedCycle("Todos");
-  }, [brandFilter, salesRowsAll]);
+  }, [brandFilter, salesRowsAll, salesCityFilter]);
 
   const cycleOptions = useMemo(() => {
     if (!salesRows.length) return ["Todos"];
@@ -481,31 +489,76 @@ export default function DashboardEstoquePage() {
     return { ciclo: best.Ciclo, qtd: best.QtdVendida };
   }, [cyclesForSku]);
 
+  // 🔥 resumoFiltro
   const resumoFiltro = useMemo(() => {
-    let mediaFiltro = 0, maxFiltroQtd = 0, maxFiltroLabel = "";
+    let mediaFiltro = 0;
+    let maxFiltroQtd = 0;
+    let maxFiltroLabel = "-";
+
+    let base;
     if (selectedCycle === "Todos") {
-      mediaFiltro = media17; maxFiltroQtd = maxInfo.qtd || 0; maxFiltroLabel = maxInfo.ciclo || "-";
+      base = skuSel === "Todos"
+        ? salesRows
+        : salesRows.filter(r => r.CodigoProduto === skuSel);
     } else {
-      const base = (skuSel === "Todos")
+      base = skuSel === "Todos"
         ? salesRows.filter(r => r.Ciclo === selectedCycle)
         : salesRows.filter(r => r.Ciclo === selectedCycle && r.CodigoProduto === skuSel);
-      const bySku = new Map();
-      for (const r of base) bySku.set(r.CodigoProduto, (bySku.get(r.CodigoProduto) || 0) + (r.QtdVendida || 0));
-      const arr = Array.from(bySku.values());
-      const total = arr.reduce((s,v)=>s+v,0);
-      const count = arr.length || 1;
-      mediaFiltro = total / count;
-      let bestSku = { sku:"", qtd:0 };
-      for (const [sku, qtd] of bySku.entries()) if (qtd > bestSku.qtd) bestSku = { sku, qtd };
-      maxFiltroQtd = bestSku.qtd || 0;
-      maxFiltroLabel = bestSku.sku ? `SKU ${bestSku.sku}` : "-";
     }
+
+    if (!base.length) {
+      mediaFiltro = selectedCycle === "Todos" ? media17 : 0;
+      return {
+        mediaTexto: Number(mediaFiltro || 0).toLocaleString("pt-BR", {
+          minimumFractionDigits: 0,
+          maximumFractionDigits: 2,
+        }),
+        maxQtdTexto: "0",
+        maxLabel: "-",
+      };
+    }
+
+    const bySku = new Map();
+    for (const r of base) {
+      bySku.set(
+        r.CodigoProduto,
+        (bySku.get(r.CodigoProduto) || 0) + (r.QtdVendida || 0)
+      );
+    }
+
+    const arr = Array.from(bySku.values());
+    const total = arr.reduce((s, v) => s + v, 0);
+    const count = arr.length || 1;
+
+    mediaFiltro = selectedCycle === "Todos" ? media17 : (total / count);
+
+    let bestSku = { sku: "", qtd: 0 };
+    for (const [sku, qtd] of bySku.entries()) {
+      if (qtd > bestSku.qtd) bestSku = { sku, qtd };
+    }
+
+    maxFiltroQtd = bestSku.qtd || 0;
+
+    if (bestSku.sku) {
+      let desc = "";
+      for (const r of rowsProcessed) {
+        if (r.CodigoProduto === bestSku.sku && r.DescricaoProduto) {
+          desc = r.DescricaoProduto;
+          break;
+        }
+      }
+      maxFiltroLabel = desc || bestSku.sku;
+    }
+
     return {
-      mediaTexto: Number(mediaFiltro || 0).toLocaleString("pt-BR", { minimumFractionDigits: 0, maximumFractionDigits: 2 }),
+      mediaTexto: Number(mediaFiltro || 0).toLocaleString("pt-BR", {
+        minimumFractionDigits: 0,
+        maximumFractionDigits: 2,
+      }),
       maxQtdTexto: Number(maxFiltroQtd || 0).toLocaleString("pt-BR"),
-      maxLabel: maxFiltroLabel
+      maxLabel: maxFiltroLabel,
     };
-  }, [media17, maxInfo, selectedCycle, skuSel, salesRows]);
+  }, [media17, selectedCycle, skuSel, salesRows, rowsProcessed]);
 
   /* ====== sku -> descrição ====== */
   const skuMeta = useMemo(() => {
@@ -516,6 +569,29 @@ export default function DashboardEstoquePage() {
     }
     return map;
   }, [rowsProcessed]);
+
+  // 🔹 sku -> Classe (Curva)
+  const skuClasse = useMemo(() => {
+    const map = new Map();
+    for (const r of rowsProcessed) {
+      if (r.CodigoProduto && r.Classe && !map.has(r.CodigoProduto)) {
+        map.set(r.CodigoProduto, r.Classe);
+      }
+    }
+    return map;
+  }, [rowsProcessed]);
+
+  const skuOptions = useMemo(() => {
+    if (!skuList || !skuList.length) return ["Todos"];
+    return skuList.map((sku) => {
+      if (sku === "Todos") return { value: "Todos", label: "Todos" };
+      const desc = skuMeta.get(sku);
+      return {
+        value: sku,
+        label: desc && String(desc).trim() ? String(desc).trim() : sku,
+      };
+    });
+  }, [skuList, skuMeta]);
 
   /* ====== estatísticas por SKU ====== */
   const statsPorSku = useMemo(() => {
@@ -616,7 +692,7 @@ export default function DashboardEstoquePage() {
     return by;
   }, [rowsProcessed]);
 
-  // Plano (sempre “vendas”, fallback igualitário)
+  // Plano (com filtro de Classe/Curva)
   const { transfers, buys, totalsPlan } = useMemo(() => {
     const transfers = [];
     const buys = [];
@@ -626,6 +702,12 @@ export default function DashboardEstoquePage() {
       const sku = rec.SKU;
       const desc = rec.Descricao;
       const globalMin = rec.EstoqueMinimoSugerido;
+
+      // 🔹 aplica filtro de Classe/Curva
+      const classe = skuClasse.get(sku) || "";
+      if (planCurveFilter !== "Todas" && classe !== planCurveFilter) {
+        continue;
+      }
 
       const citiesMap = estoqueBySkuCity.get(sku);
       if (!citiesMap || !citiesMap.size) continue;
@@ -662,7 +744,7 @@ export default function DashboardEstoquePage() {
       });
 
       // excessos/deficits
-      const sources = [];
+      const sources =[];
       const sinks = [];
       for (const [city, acc] of citiesMap.entries()) {
         const available = (acc.EstoqueAtual || 0) + (acc.EstoqueTransito || 0) - (acc.PendLiq || 0);
@@ -694,7 +776,7 @@ export default function DashboardEstoquePage() {
     }
 
     return { transfers, buys, totalsPlan: { totalTransfer, totalBuy, moves } };
-  }, [sugestaoMinimo, estoqueBySkuCity, salesShareCity]);
+  }, [sugestaoMinimo, estoqueBySkuCity, salesShareCity, skuClasse, planCurveFilter]);
 
   const planCityOptions = useMemo(() => {
     const set = new Set();
@@ -703,6 +785,16 @@ export default function DashboardEstoquePage() {
     }
     return ["Todas", ...Array.from(set).sort((a,b)=>a.localeCompare(b))];
   }, [estoqueBySkuCity]);
+
+  // 🔹 opções de Classe para o filtro do plano
+  const planCurveOptions = useMemo(() => {
+    const set = new Set();
+    for (const rec of sugestaoMinimo) {
+      const cls = skuClasse.get(rec.SKU);
+      if (cls) set.add(cls);
+    }
+    return ["Todas", ...Array.from(set).sort((a, b) => a.localeCompare(b))];
+  }, [sugestaoMinimo, skuClasse]);
 
   const transfersView = useMemo(() => {
     if (planCityFilter === "Todas") return transfers;
@@ -771,7 +863,7 @@ export default function DashboardEstoquePage() {
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(buysView), "Compras");
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet([
       { TotalTransferir: totalsPlan.totalTransfer, Movimentos: totalsPlan.moves, TotalComprar: totalsPlan.totalBuy },
-      { ModoDistribuicao: "vendas (fallback igualitário se sem vendas por cidade)", CidadeFiltroPlano: planCityFilter, MarcaFiltro: brandFilter }
+      { ModoDistribuicao: "vendas (fallback igualitário se sem vendas por cidade)", CidadeFiltroPlano: planCityFilter, MarcaFiltro: brandFilter, ClasseFiltroPlano: planCurveFilter }
     ]), "Resumo");
     XLSX.writeFile(wb, "plano_transferencia_compra.xlsx");
   }
@@ -780,7 +872,7 @@ export default function DashboardEstoquePage() {
 
   /* ================= RENDER ================= */
   return (
-    <div className="min-h-screen bg-[#0c1118] text-white">
+    <div className="min-h-screen bg-[#0c1118] text:white text-white">
       {/* HEADER */}
       <header className="sticky top-0 z-20 border-b border-white/10 bg-[#0c1118]/80 backdrop-blur px-6 py-4">
         <div className="max-w-7xl mx-auto flex items-center justify-between gap-3">
@@ -791,7 +883,7 @@ export default function DashboardEstoquePage() {
             <div className="leading-tight">
               <div className="text-sm text-white/70">BI Service Beta</div>
               <h1 className="text-xl font-bold">
-                <span className="text-white">Dashboard</span>{" "}
+                <span className="text:white">Dashboard</span>{" "}
                 <span style={{ color: C_GREEN }}>de Estoque</span>
               </h1>
             </div>
@@ -810,20 +902,15 @@ export default function DashboardEstoquePage() {
             <button onClick={handlePrint} className="rounded-lg px-3 py-2 text-sm font-medium shadow" style={{ background: C_AMBER }}>
               Imprimir
             </button>
-            {/* 🔴 Botão Sair agora faz logout de verdade */}
-            <button
-              onClick={handleLogout}
-              className="rounded-lg px-3 py-2 text-sm font-medium shadow inline-flex items-center gap-2"
-              style={{ background: C_ROSE }}
-            >
+            <a href="/" className="rounded-lg px-3 py-2 text-sm font-medium shadow inline-flex items-center gap-2" style={{ background: C_ROSE }}>
               Sair
               <svg width="16" height="16" viewBox="0 0 24 24"><path fill="currentColor" d="M12 4l1.41 1.41L9.83 9H20v2H9.83l3.58 3.59L12 16l-6-6z"/></svg>
-            </button>
+            </a>
           </div>
         </div>
 
         {isLoading && (
-          <div className="mt-3 h-1 w-full bg-white/10 rounded">
+          <div className="mt-3 h-1 w-full bg:white/10 rounded">
             <div className="h-1 rounded" style={{ width: `${progress}%`, background: C_BLUE, transition: "width .2s" }} />
           </div>
         )}
@@ -836,7 +923,7 @@ export default function DashboardEstoquePage() {
               <svg width="22" height="22" viewBox="0 0 24 24" className="animate-spin"><path fill="currentColor" d="M12 1a11 11 0 1 0 11 11A11.013 11.013 0 0 0 12 1Zm0 19a8 8 0 1 1 8-8a8.009 8.009 0 0 1-8 8Z"/><path fill="currentColor" d="M12 4a8 8 0 0 1 8 8h3A11 11 0 0 0 12 1Z"/></svg>
               <h2 className="text-lg font-semibold">Processando arquivo</h2>
             </div>
-            <p className="text-sm text-white/80 mb-3">{status || "Aguarde…"}</p>
+            <p className="text-sm text:white/80 mb-3">{status || "Aguarde…"}</p>
             <div className="h-2 w-full bg-white/10 rounded">
               <div className="h-2 rounded" style={{ width: `${progress}%`, background: C_GREEN, transition: "width .2s" }} />
             </div>
@@ -857,8 +944,20 @@ export default function DashboardEstoquePage() {
         </div>
 
         <div className="flex gap-2">
-          <button onClick={()=>{ setBrandFilter("Todas"); setCityFilter("Todas"); setQuery(""); setSkuSel("Todos"); setSelectedCycle("Todos"); }}
-            className="rounded-lg px-3 py-2 text-sm font-medium" style={{ background:"rgba(148,163,184,.5)" }}>
+          <button
+            onClick={()=>{ 
+              setBrandFilter("Todas");
+              setCityFilter("Todas");
+              setQuery("");
+              setSkuSel("Todos");
+              setSelectedCycle("Todos");
+              setSalesCityFilter("Todas");
+              setPlanCityFilter("Todas");
+              setPlanCurveFilter("Todas");
+            }}
+            className="rounded-lg px-3 py-2 text-sm font-medium"
+            style={{ background:"rgba(148,163,184,.5)" }}
+          >
             Limpar filtros
           </button>
           <button onClick={()=>setShowDetail(v=>!v)} className="rounded-lg px-3 py-2 text-sm font-medium" style={{ background: C_PURPLE }}>
@@ -903,7 +1002,7 @@ export default function DashboardEstoquePage() {
           <Card title={`Detalhe por SKU${brandFilter!=="Todas" ? ` — ${brandFilter}` : ""}`} borderColor="rgba(124,58,237,.35)">
             <div className="overflow-auto rounded-lg" style={{ border:`1px solid ${C_CARD_BORDER}` }}>
               <table className="w-full text-sm">
-                <thead className="bg:white/5">
+                <thead className="bg-white/5">
                   <tr>
                     {["Código do Produto","Descrição do Produto","Cidade","Estoque Atual","Em Trânsito","Pedidos Pendentes","Pendentes Líquidos"].map((h)=>(<th key={h} className="text-left px-3 py-2 font-medium">{h}</th>))}
                   </tr>
@@ -935,7 +1034,7 @@ export default function DashboardEstoquePage() {
           right={
             <div className="flex items-end gap-2 no-print">
               <span className="hidden sm:inline text-xs rounded-md px-2 py-1" style={{ background: "rgba(59,130,246,.15)", border: "1px solid rgba(59,130,246,.35)" }}>
-                Filtrando: <b>{skuSel}</b> · <b>{selectedCycle}</b> · <b>{brandFilter}</b>
+                Filtrando: <b>{skuSel}</b> · <b>{selectedCycle}</b> · <b>{brandFilter}</b> · <b>{salesCityFilter}</b>
               </span>
               <button
                 onClick={()=>setShowCycleDetail(v=>!v)}
@@ -955,12 +1054,34 @@ export default function DashboardEstoquePage() {
           }
         >
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
-            <SelectDark label="SKU (Produto)" value={skuSel} onChange={(e)=>{ setSkuSel(e.target.value); }} options={skuList.length ? skuList : ["Todos"]}/>
-            <SelectDark label="Ciclo (para detalhe)" value={selectedCycle} onChange={(e)=>setSelectedCycle(e.target.value)} options={cycleOptions} />
+            <SelectDark
+              label="SKU (Produto)"
+              value={skuSel}
+              onChange={(e)=>{ setSkuSel(e.target.value); }}
+              options={skuOptions}
+            />
+            <SelectDark
+              label="Ciclo (para detalhe)"
+              value={selectedCycle}
+              onChange={(e)=>setSelectedCycle(e.target.value)}
+              options={cycleOptions}
+            />
+            {/* Filtro por cidade/loja nas vendas */}
+            <SelectDark
+              label="Loja (Cidade vendas)"
+              value={salesCityFilter}
+              onChange={(e)=>setSalesCityFilter(e.target.value)}
+              options={SALES_CITY_OPTIONS}
+            />
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
-            <Kpi title="Média (janela)" value={Number(media17 || 0).toLocaleString("pt-BR", { minimumFractionDigits: 0, maximumFractionDigits: 2 })} color={C_BLUE} raw />
+            <Kpi
+              title="Média (janela)"
+              value={Number(media17 || 0).toLocaleString("pt-BR", { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
+              color={C_BLUE}
+              raw
+            />
             <Kpi title="Ciclo com maior venda" value={maxInfo.ciclo || "-"} color={C_GREEN} raw />
             <Kpi title="Qtd máxima nesse ciclo" value={maxInfo.qtd || 0} color={C_AMBER} />
           </div>
@@ -970,7 +1091,7 @@ export default function DashboardEstoquePage() {
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <Kpi title="Média por ciclo (filtro)" value={resumoFiltro.mediaTexto} color={C_BLUE} raw />
                 <Kpi title="Máximo no filtro (Qtd)" value={resumoFiltro.maxQtdTexto} color={C_AMBER} raw />
-                <Kpi title="Onde ocorreu o máximo" value={resumoFiltro.maxLabel} color={C_GREEN} raw />
+                <Kpi title="Onde ocorreu o máximo" value={resumoFiltro.maxLabel} color={C_GREEN} raw size="sm" />
               </div>
             </Card>
           )}
@@ -995,67 +1116,99 @@ export default function DashboardEstoquePage() {
         </Card>
       </div>
 
-      {/* ====== SUGESTÃO DE ESTOQUE MÍNIMO ====== */}
+     {/* ====== SUGESTÃO DE ESTOQUE MÍNIMO ====== */}
       <div className="max-w-7xl mx-auto px-6 mt-10 space-y-4">
         <Card
-          title={`Sugestão de Estoque Mínimo (janela de ${CYCLE_WINDOW} ciclos)`}
-          borderColor="rgba(59,130,246,.35)"
+          title="Sugestão de Estoque Mínimo (17 ciclos)"
+          borderColor="rgba(34,197,94,.35)"
           right={
-            <div className="flex items-end gap-2 no-print">
-              <SelectDark label="Aba/Marca" value={brandFilter} onChange={(e)=>setBrandFilter(e.target.value)} options={brandOptions} />
-              <SelectDark label="Método" value={minMethod} onChange={(e)=>setMinMethod(e.target.value)} options={["media17","max17","p85","media+1sigma"]} />
-              <SelectDark label="Fator" value={covFactor} onChange={(e)=>setCovFactor(e.target.value)} options={["0.8","1.0","1.2","1.5","2.0"]} />
-              <button onClick={()=>setShowMinDetail(v=>!v)} className="rounded-lg px-3 py-2 text-xs sm:text-sm font-medium shadow" style={{ background: C_PURPLE }}>
+            <div className="flex items-center gap-2 no-print">
+              <SelectDark
+                label="Método"
+                value={minMethod}
+                onChange={(e)=>setMinMethod(e.target.value)}
+                options={[
+                  "media17",
+                  "max17",
+                  "p85",
+                  "media+1sigma",
+                ]}
+              />
+              <div>
+                <p className="text-xs text-white/70 mb-1">Fator de cobertura</p>
+                <input
+                  className="w-24 rounded-lg border border-white/10 bg-[#0f172a] px-3 py-2 text-sm text-white"
+                  value={covFactor}
+                  onChange={(e)=>setCovFactor(e.target.value)}
+                />
+              </div>
+              <button
+                onClick={()=>setShowMinDetail(v=>!v)}
+                className="rounded-lg px-3 py-2 text-xs sm:text-sm font-medium shadow"
+                style={{ background: C_PURPLE }}
+              >
                 {showMinDetail ? "Ocultar detalhe" : "Ver detalhe"}
-              </button>
-              <button onClick={exportXlsx} className="rounded-lg px-3 py-2 text-xs sm:text-sm font-medium shadow" style={{ background: C_BLUE }}>
-                Exportar XLSX
               </button>
             </div>
           }
         >
-          <p className="text-sm text-white/70 mb-3">Calculado sobre ciclos <b>distintos</b> e limitados aos <b>{CYCLE_WINDOW}</b> mais recentes.</p>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+            <Kpi
+              title="Top 1 Estoque Mínimo"
+              value={sugestaoMinimo[0]?.EstoqueMinimoSugerido || 0}
+              color={C_GREEN}
+            />
+            <Kpi
+              title="Top 5 (soma)"
+              value={sugestaoMinimo.slice(0,5).reduce((s,r)=>s+(r.EstoqueMinimoSugerido||0),0)}
+              color={C_BLUE}
+            />
+            <Kpi
+              title="Qtd SKUs com mínimo > 0"
+              value={sugestaoMinimo.filter(r => (r.EstoqueMinimoSugerido||0) > 0).length}
+              color={C_AMBER}
+            />
+          </div>
 
-          <div className="mb-4">
-            <Card title="Top 20 SKUs — Estoque Mínimo Sugerido" borderColor="rgba(59,130,246,.35)">
-              <div style={{ width: "100%", height: 360 }}>
-                <ResponsiveContainer width="100%" height={360}>
-                  <BarChart data={minChartData} margin={{ left: 12, right: 12, top: 10, bottom: 10 }}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="Label" tick={{ fontSize: 11 }} interval={0} angle={-20} height={70} />
-                    <YAxis />
-                    <Tooltip />
-                    <Legend />
-                    <Bar dataKey="Min" name="Mínimo sugerido" fill={C_GREEN} />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            </Card>
+          <div style={{ width: "100%", height: 360, marginTop: 16 }}>
+            <ResponsiveContainer width="100%" height={360}>
+              <BarChart
+                data={minChartData}
+                margin={{ left: 12, right: 12, top: 10, bottom: 10 }}
+              >
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="SKU" hide />
+                <YAxis />
+                <Tooltip
+                  formatter={(value, name, props) => [value, "Estoque mínimo sugerido"]}
+                  labelFormatter={(label, payload) => {
+                    const item = payload && payload[0] && payload[0].payload;
+                    return item ? item.Label : label;
+                  }}
+                />
+                <Legend />
+                <Bar dataKey="Min" name="Estoque mínimo sugerido" fill={C_GREEN} />
+              </BarChart>
+            </ResponsiveContainer>
           </div>
 
           {showMinDetail && (
-            <div className="overflow-auto rounded-lg" style={{ border: `1px solid ${C_CARD_BORDER}` }}>
+            <div className="mt-6 overflow-auto rounded-lg" style={{ border:`1px solid ${C_CARD_BORDER}` }}>
               <table className="w-full text-sm">
                 <thead className="bg-white/5">
                   <tr>
-                    {["SKU","Descrição","Ciclos usados","Estoque mínimo sugerido"].map((h)=>(
-                      <th key={h} className="text-left px-3 py-2 font-medium">{h}</th>
-                    ))}
+                    {["SKU","Descrição","Ciclos usados","Mínimo sugerido"].map((h)=>(<th key={h} className="text-left px-3 py-2 font-medium">{h}</th>))}
                   </tr>
                 </thead>
                 <tbody>
-                  {sugestaoMinimo.length ? sugestaoMinimo.map((r, i)=>(
-                    <tr key={r.SKU + "-" + i} className="border-t" style={{ borderColor: C_CARD_BORDER }}>
+                  {sugestaoMinimo.map((r)=>(
+                    <tr key={r.SKU} className="border-t" style={{ borderColor:C_CARD_BORDER }}>
                       <td className="px-3 py-2 whitespace-nowrap">{r.SKU}</td>
                       <td className="px-3 py-2">{r.Descricao}</td>
-                      <td className="px-3 py-2">{r.CiclosUsados}</td>
-                      <td className="px-3 py-2 text-right">{r.EstoqueMinimoSugerido.toLocaleString("pt-BR")}</td>
+                      <td className="px-3 py-2 text-right">{r.CiclosUsados}</td>
+                      <td className="px-3 py-2 text-right">{r.EstoqueMinimoSugerido}</td>
                     </tr>
-                  )) : (
-                    <tr className="border-t" style={{ borderColor: C_CARD_BORDER }}>
-                      <td className="px-3 py-4" colSpan={4}>Sem dados suficientes para calcular.</td>
-                    </tr>
-                  )}
+                  ))}
                 </tbody>
               </table>
             </div>
@@ -1063,112 +1216,110 @@ export default function DashboardEstoquePage() {
         </Card>
       </div>
 
-      {/* ====== PLANO DE TRANSFERÊNCIA & COMPRA ====== */}
-      <div className="max-w-7xl mx-auto px-6 mt-10">
+      {/* ====== PLANO DE TRANSFERÊNCIAS & COMPRAS ====== */}
+      <div className="max-w-7xl mx-auto px-6 mt-10 mb-10 space-y-4">
         <Card
           title="Plano de Transferências & Compras"
-          borderColor="rgba(34,197,94,.35)"
+          borderColor="rgba(239,68,68,.35)"
           right={
-            <div className="flex items-end gap-2 no-print">
+            <div className="flex items-center gap-2 no-print">
               <SelectDark
-                label="Cidade (Plano)"
+                label="Cidade (filtro plano)"
                 value={planCityFilter}
                 onChange={(e)=>setPlanCityFilter(e.target.value)}
                 options={planCityOptions}
               />
-              <button onClick={()=>setShowPlanDetail(v=>!v)} className="rounded-lg px-3 py-2 text-xs sm:text-sm font-medium shadow self-end" style={{ background: C_PURPLE }}>
+              {/* 🔹 NOVO filtro Classe/Curva */}
+              <SelectDark
+                label="Classe (curva SKU)"
+                value={planCurveFilter}
+                onChange={(e)=>setPlanCurveFilter(e.target.value)}
+                options={planCurveOptions}
+              />
+              <button
+                onClick={()=>setPlanTab("transfer")}
+                className={`rounded-lg px-3 py-2 text-xs sm:text-sm font-medium shadow ${
+                  planTab === "transfer" ? "bg-emerald-500" : "bg-white/10"
+                }`}
+              >
+                Transferências
+              </button>
+              <button
+                onClick={()=>setPlanTab("compras")}
+                className={`rounded-lg px-3 py-2 text-xs sm:text-sm font-medium shadow ${
+                  planTab === "compras" ? "bg-emerald-500" : "bg-white/10"
+                }`}
+              >
+                Compras
+              </button>
+              <button
+                onClick={()=>setShowPlanDetail(v=>!v)}
+                className="rounded-lg px-3 py-2 text-xs sm:text-sm font-medium shadow"
+                style={{ background: C_PURPLE }}
+              >
                 {showPlanDetail ? "Ocultar detalhe" : "Ver detalhe"}
               </button>
-              <button onClick={exportPlanXlsx} className="rounded-lg px-3 py-2 text-xs sm:text-sm font-medium shadow self-end" style={{ background: C_GREEN }}>
-                Exportar Plano
+              <button
+                onClick={exportPlanXlsx}
+                className="rounded-lg px-3 py-2 text-xs sm:text-sm font-medium shadow"
+                style={{ background: C_BLUE }}
+              >
+                Exportar Plano XLSX
               </button>
             </div>
           }
         >
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
-            <Kpi title="Total a transferir" value={totalsPlan.totalTransfer} color={C_GREEN}/>
-            <Kpi title="Movimentos" value={totalsPlan.moves} color={C_BLUE}/>
-            <Kpi title="Total a comprar" value={totalsPlan.totalBuy} color={C_AMBER}/>
+            <Kpi title="Total a transferir (itens)" value={totalsPlan.totalTransfer} color={C_GREEN} />
+            <Kpi title="Movimentos de transferência" value={totalsPlan.moves} color={C_BLUE} />
+            <Kpi title="Total a comprar (itens)" value={totalsPlan.totalBuy} color={C_ROSE} />
           </div>
 
-          {/* GRÁFICOS DO PLANO */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
-            <Card title="Transferências por Cidade (Destino)" borderColor="rgba(34,197,94,.35)">
-              <div style={{ width: "100%", height: 300 }}>
-                <ResponsiveContainer width="100%" height={300}>
-                  <BarChart data={transfersByDestino} margin={{ left: 12, right: 12, top: 10, bottom: 10 }}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="Cidade" />
-                    <YAxis />
-                    <Tooltip />
-                    <Legend />
-                    <Bar dataKey="Qtd" name="Qtd a transferir" fill={C_GREEN} />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            </Card>
-
-            <Card title="Top 10 SKUs para Transferir" borderColor="rgba(34,197,94,.35)">
-              <div style={{ width: "100%", height: 300 }}>
-                <ResponsiveContainer width="100%" height={300}>
-                  <BarChart data={transfersTopSku} margin={{ left: 12, right: 12, top: 10, bottom: 10 }}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="SKU" tick={{ fontSize: 11 }} interval={0} angle={-20} height={70} />
-                    <YAxis />
-                    <Tooltip />
-                    <Legend />
-                    <Bar dataKey="Qtd" name="Qtd a transferir" fill={C_BLUE} />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            </Card>
-
-            <Card title="Compras por Cidade" borderColor="rgba(245,158,11,.35)">
-              <div style={{ width: "100%", height: 300 }}>
-                <ResponsiveContainer width="100%" height={300}>
-                  <BarChart data={buysByCidade} margin={{ left: 12, right: 12, top: 10, bottom: 10 }}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="Cidade" />
-                    <YAxis />
-                    <Tooltip />
-                    <Legend />
-                    <Bar dataKey="Qtd" name="Qtd a comprar" fill={C_AMBER} />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            </Card>
-          </div>
-
-          {showPlanDetail && (
+          {planTab === "transfer" ? (
             <>
-              <div className="mb-3 no-print flex gap-2">
-                <button
-                  onClick={()=>setPlanTab("transfer")}
-                  className={"rounded-lg px-3 py-2 text-sm font-medium " + (planTab==="transfer" ? "bg-white/20" : "bg-white/10")}
-                >
-                  Transferências sugeridas
-                </button>
-                <button
-                  onClick={()=>setPlanTab("buy")}
-                  className={"rounded-lg px-3 py-2 text-sm font-medium " + (planTab==="buy" ? "bg-white/20" : "bg-white/10")}
-                >
-                  Compras sugeridas
-                </button>
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
+                <Card title="Transferências por Cidade de Destino" borderColor="rgba(34,197,94,.35)">
+                  <div style={{ width: "100%", height: 300 }}>
+                    <ResponsiveContainer width="100%" height={300}>
+                      <BarChart data={transfersByDestino} margin={{ left: 12, right: 12, top: 10, bottom: 10 }}>
+                        <CartesianGrid strokeDasharray="3 3" />
+                        <XAxis dataKey="Cidade" />
+                        <YAxis />
+                        <Tooltip />
+                        <Legend />
+                        <Bar dataKey="Qtd" name="Qtd a transferir" fill={C_GREEN} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </Card>
+
+                <Card title="Top 10 SKUs para Transferir" borderColor="rgba(34,197,94,.35)">
+                  <div style={{ width: "100%", height: 300 }}>
+                    <ResponsiveContainer width="100%" height={300}>
+                      <BarChart data={transfersTopSku} margin={{ left: 12, right: 12, top: 10, bottom: 10 }}>
+                        <CartesianGrid strokeDasharray="3 3" />
+                        <XAxis dataKey="SKU" hide />
+                        <YAxis />
+                        <Tooltip />
+                        <Legend />
+                        <Bar dataKey="Qtd" name="Qtd a transferir" fill={C_BLUE} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </Card>
               </div>
 
-              {planTab === "transfer" ? (
-                <div className="overflow-auto rounded-lg" style={{ border: `1px solid ${C_CARD_BORDER}` }}>
+              {showPlanDetail && (
+                <div className="mt-6 overflow-auto rounded-lg" style={{ border:`1px solid ${C_CARD_BORDER}` }}>
                   <table className="w-full text-sm">
                     <thead className="bg-white/5">
                       <tr>
-                        {["SKU","Descrição","Origem","Destino","Quantidade"].map(h=>(
-                          <th key={h} className="text-left px-3 py-2 font-medium">{h}</th>
-                        ))}
+                        {["SKU","Descrição","Origem","Destino","Qtd a transferir"].map((h)=>(<th key={h} className="text-left px-3 py-2 font-medium">{h}</th>))}
                       </tr>
                     </thead>
                     <tbody>
-                      {transfersView.length ? transfersView.map((r, i)=>(
-                        <tr key={i} className="border-t" style={{ borderColor: C_CARD_BORDER }}>
+                      {transfersView.length ? transfersView.map((r, idx)=>(
+                        <tr key={idx} className="border-t" style={{ borderColor: C_CARD_BORDER }}>
                           <td className="px-3 py-2 whitespace-nowrap">{r.SKU}</td>
                           <td className="px-3 py-2">{r.Descricao}</td>
                           <td className="px-3 py-2">{r.Origem}</td>
@@ -1183,19 +1334,38 @@ export default function DashboardEstoquePage() {
                     </tbody>
                   </table>
                 </div>
-              ) : (
-                <div className="overflow-auto rounded-lg" style={{ border: `1px solid ${C_CARD_BORDER}` }}>
+              )}
+            </>
+          ) : (
+            <>
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
+                <Card title="Compras por Cidade" borderColor="rgba(239,68,68,.35)">
+                  <div style={{ width: "100%", height: 300 }}>
+                    <ResponsiveContainer width="100%" height={300}>
+                      <BarChart data={buysByCidade} margin={{ left: 12, right: 12, top: 10, bottom: 10 }}>
+                        <CartesianGrid strokeDasharray="3 3" />
+                        <XAxis dataKey="Cidade" />
+                        <YAxis />
+                        <Tooltip />
+                        <Legend />
+                        <Bar dataKey="Qtd" name="Qtd a comprar" fill={C_ROSE} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </Card>
+              </div>
+
+              {showPlanDetail && (
+                <div className="mt-6 overflow-auto rounded-lg" style={{ border:`1px solid ${C_CARD_BORDER}` }}>
                   <table className="w-full text-sm">
                     <thead className="bg-white/5">
                       <tr>
-                        {["SKU","Descrição","Cidade","Quantidade"].map(h=>(
-                          <th key={h} className="text-left px-3 py-2 font-medium">{h}</th>
-                        ))}
+                        {["SKU","Descrição","Cidade","Qtd a comprar"].map((h)=>(<th key={h} className="text-left px-3 py-2 font-medium">{h}</th>))}
                       </tr>
                     </thead>
                     <tbody>
-                      {buysView.length ? buysView.map((r, i)=>(
-                        <tr key={i} className="border-t" style={{ borderColor: C_CARD_BORDER }}>
+                      {buysView.length ? buysView.map((r, idx)=>(
+                        <tr key={idx} className="border-t" style={{ borderColor: C_CARD_BORDER }}>
                           <td className="px-3 py-2 whitespace-nowrap">{r.SKU}</td>
                           <td className="px-3 py-2">{r.Descricao}</td>
                           <td className="px-3 py-2">{r.Cidade}</td>

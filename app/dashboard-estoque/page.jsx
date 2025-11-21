@@ -181,6 +181,7 @@ export default function DashboardEstoquePage() {
   // Plano
   const [planTab, setPlanTab] = useState("transfer");
   const [planCityFilter, setPlanCityFilter] = useState("Todas");
+  const [planCurveFilter, setPlanCurveFilter] = useState("Todas");
 
   useEffect(() => { (async () => setPdvMap(await fetchPdvCityMapLocal()))(); }, []);
 
@@ -248,6 +249,17 @@ export default function DashboardEstoquePage() {
       const pedidoPendCol   = findCol(["pedido pendente","pedido_pendente","pedidos pendentes","pedido aberto"]);
       let pdvCol = null; for (const rawKey in headerMap) if (headerMap[rawKey] === "pdv") { pdvCol = rawKey; break; }
 
+      // 🔹 nova coluna: Classe (curva do SKU, coluna B "Classe")
+      const classeCol = findCol([
+        "classe",
+        "classe sku",
+        "classe do sku",
+        "classe do produto",
+        "curva",
+        "curva sku",
+        "curva do produto"
+      ]);
+
       if (!skuCol) continue;
 
       const marca = brandFromSheetName(sheetName);
@@ -269,6 +281,10 @@ export default function DashboardEstoquePage() {
         const pend  = Number(r?.[pedidoPendCol] ?? 0) || 0;
         const pendLiquido = Math.max(pend - trans, 0);
 
+        const classe = classeCol
+          ? String(r?.[classeCol] ?? "").trim().toUpperCase()
+          : "";
+
         tmpRows.push({
           Marca: marca,
           Aba: sheetName,
@@ -276,6 +292,7 @@ export default function DashboardEstoquePage() {
           DescricaoProduto: desc,
           PDV: pdv,
           Cidade: cidade,
+          Classe: classe,
           EstoqueAtual: est,
           EstoqueTransito: trans,
           PedidosPendentes: pend,
@@ -472,13 +489,12 @@ export default function DashboardEstoquePage() {
     return { ciclo: best.Ciclo, qtd: best.QtdVendida };
   }, [cyclesForSku]);
 
-  // 🔥 resumoFiltro: sempre descrição do SKU onde ocorreu o máximo (respeitando filtros)
+  // 🔥 resumoFiltro
   const resumoFiltro = useMemo(() => {
     let mediaFiltro = 0;
     let maxFiltroQtd = 0;
     let maxFiltroLabel = "-";
 
-    // Base de dados conforme filtros atuais
     let base;
     if (selectedCycle === "Todos") {
       base = skuSel === "Todos"
@@ -491,7 +507,6 @@ export default function DashboardEstoquePage() {
     }
 
     if (!base.length) {
-      // Se não houver dados, usa a média de 17 ciclos somente quando ciclo = Todos
       mediaFiltro = selectedCycle === "Todos" ? media17 : 0;
       return {
         mediaTexto: Number(mediaFiltro || 0).toLocaleString("pt-BR", {
@@ -503,7 +518,6 @@ export default function DashboardEstoquePage() {
       };
     }
 
-    // Soma por SKU dentro da base filtrada
     const bySku = new Map();
     for (const r of base) {
       bySku.set(
@@ -516,11 +530,8 @@ export default function DashboardEstoquePage() {
     const total = arr.reduce((s, v) => s + v, 0);
     const count = arr.length || 1;
 
-    // Quando ciclo = Todos, mantemos a média da janela (17 ciclos).
-    // Quando ciclo específico, usamos a média das vendas dos SKUs nesse ciclo.
     mediaFiltro = selectedCycle === "Todos" ? media17 : (total / count);
 
-    // Descobre o SKU com maior venda no filtro
     let bestSku = { sku: "", qtd: 0 };
     for (const [sku, qtd] of bySku.entries()) {
       if (qtd > bestSku.qtd) bestSku = { sku, qtd };
@@ -528,7 +539,6 @@ export default function DashboardEstoquePage() {
 
     maxFiltroQtd = bestSku.qtd || 0;
 
-    // Usa a descrição do SKU em vez do código
     if (bestSku.sku) {
       let desc = "";
       for (const r of rowsProcessed) {
@@ -556,6 +566,17 @@ export default function DashboardEstoquePage() {
     for (const r of rowsProcessed) {
       if (r.CodigoProduto && !map.has(r.CodigoProduto)) map.set(r.CodigoProduto, r.DescricaoProduto || "");
       if (r.CodigoProduto && r.DescricaoProduto) map.set(r.CodigoProduto, r.DescricaoProduto);
+    }
+    return map;
+  }, [rowsProcessed]);
+
+  // 🔹 sku -> Classe (Curva)
+  const skuClasse = useMemo(() => {
+    const map = new Map();
+    for (const r of rowsProcessed) {
+      if (r.CodigoProduto && r.Classe && !map.has(r.CodigoProduto)) {
+        map.set(r.CodigoProduto, r.Classe);
+      }
     }
     return map;
   }, [rowsProcessed]);
@@ -671,7 +692,7 @@ export default function DashboardEstoquePage() {
     return by;
   }, [rowsProcessed]);
 
-  // Plano
+  // Plano (com filtro de Classe/Curva)
   const { transfers, buys, totalsPlan } = useMemo(() => {
     const transfers = [];
     const buys = [];
@@ -681,6 +702,12 @@ export default function DashboardEstoquePage() {
       const sku = rec.SKU;
       const desc = rec.Descricao;
       const globalMin = rec.EstoqueMinimoSugerido;
+
+      // 🔹 aplica filtro de Classe/Curva
+      const classe = skuClasse.get(sku) || "";
+      if (planCurveFilter !== "Todas" && classe !== planCurveFilter) {
+        continue;
+      }
 
       const citiesMap = estoqueBySkuCity.get(sku);
       if (!citiesMap || !citiesMap.size) continue;
@@ -749,7 +776,7 @@ export default function DashboardEstoquePage() {
     }
 
     return { transfers, buys, totalsPlan: { totalTransfer, totalBuy, moves } };
-  }, [sugestaoMinimo, estoqueBySkuCity, salesShareCity]);
+  }, [sugestaoMinimo, estoqueBySkuCity, salesShareCity, skuClasse, planCurveFilter]);
 
   const planCityOptions = useMemo(() => {
     const set = new Set();
@@ -758,6 +785,16 @@ export default function DashboardEstoquePage() {
     }
     return ["Todas", ...Array.from(set).sort((a,b)=>a.localeCompare(b))];
   }, [estoqueBySkuCity]);
+
+  // 🔹 opções de Classe para o filtro do plano
+  const planCurveOptions = useMemo(() => {
+    const set = new Set();
+    for (const rec of sugestaoMinimo) {
+      const cls = skuClasse.get(rec.SKU);
+      if (cls) set.add(cls);
+    }
+    return ["Todas", ...Array.from(set).sort((a, b) => a.localeCompare(b))];
+  }, [sugestaoMinimo, skuClasse]);
 
   const transfersView = useMemo(() => {
     if (planCityFilter === "Todas") return transfers;
@@ -826,7 +863,7 @@ export default function DashboardEstoquePage() {
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(buysView), "Compras");
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet([
       { TotalTransferir: totalsPlan.totalTransfer, Movimentos: totalsPlan.moves, TotalComprar: totalsPlan.totalBuy },
-      { ModoDistribuicao: "vendas (fallback igualitário se sem vendas por cidade)", CidadeFiltroPlano: planCityFilter, MarcaFiltro: brandFilter }
+      { ModoDistribuicao: "vendas (fallback igualitário se sem vendas por cidade)", CidadeFiltroPlano: planCityFilter, MarcaFiltro: brandFilter, ClasseFiltroPlano: planCurveFilter }
     ]), "Resumo");
     XLSX.writeFile(wb, "plano_transferencia_compra.xlsx");
   }
@@ -886,7 +923,7 @@ export default function DashboardEstoquePage() {
               <svg width="22" height="22" viewBox="0 0 24 24" className="animate-spin"><path fill="currentColor" d="M12 1a11 11 0 1 0 11 11A11.013 11.013 0 0 0 12 1Zm0 19a8 8 0 1 1 8-8a8.009 8.009 0 0 1-8 8Z"/><path fill="currentColor" d="M12 4a8 8 0 0 1 8 8h3A11 11 0 0 0 12 1Z"/></svg>
               <h2 className="text-lg font-semibold">Processando arquivo</h2>
             </div>
-            <p className="text-sm text-white/80 mb-3">{status || "Aguarde…"}</p>
+            <p className="text-sm text:white/80 mb-3">{status || "Aguarde…"}</p>
             <div className="h-2 w-full bg-white/10 rounded">
               <div className="h-2 rounded" style={{ width: `${progress}%`, background: C_GREEN, transition: "width .2s" }} />
             </div>
@@ -915,6 +952,8 @@ export default function DashboardEstoquePage() {
               setSkuSel("Todos");
               setSelectedCycle("Todos");
               setSalesCityFilter("Todas");
+              setPlanCityFilter("Todas");
+              setPlanCurveFilter("Todas");
             }}
             className="rounded-lg px-3 py-2 text-sm font-medium"
             style={{ background:"rgba(148,163,184,.5)" }}
@@ -1189,6 +1228,13 @@ export default function DashboardEstoquePage() {
                 value={planCityFilter}
                 onChange={(e)=>setPlanCityFilter(e.target.value)}
                 options={planCityOptions}
+              />
+              {/* 🔹 NOVO filtro Classe/Curva */}
+              <SelectDark
+                label="Classe (curva SKU)"
+                value={planCurveFilter}
+                onChange={(e)=>setPlanCurveFilter(e.target.value)}
+                options={planCurveOptions}
               />
               <button
                 onClick={()=>setPlanTab("transfer")}
