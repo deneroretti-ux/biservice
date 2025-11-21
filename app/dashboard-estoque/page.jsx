@@ -421,7 +421,7 @@ export default function DashboardEstoquePage() {
     setRowsProcessed(rows);
   }, [brandFilter, allRowsEstoque]);
 
-  // 🔹 aqui entra o filtro de LOJA nas vendas
+  // 🔹 filtro de LOJA nas vendas
   useEffect(() => {
     let rows = brandFilter === "Todas" ? salesRowsAll : salesRowsAll.filter(r => r.Marca === brandFilter);
 
@@ -472,51 +472,72 @@ export default function DashboardEstoquePage() {
     return { ciclo: best.Ciclo, qtd: best.QtdVendida };
   }, [cyclesForSku]);
 
+  // 🔥 resumoFiltro: sempre descrição do SKU onde ocorreu o máximo (respeitando filtros)
   const resumoFiltro = useMemo(() => {
-    let mediaFiltro = 0, maxFiltroQtd = 0, maxFiltroLabel = "";
+    let mediaFiltro = 0;
+    let maxFiltroQtd = 0;
+    let maxFiltroLabel = "-";
 
+    // Base de dados conforme filtros atuais
+    let base;
     if (selectedCycle === "Todos") {
-      mediaFiltro = media17;
-      maxFiltroQtd = maxInfo.qtd || 0;
-      maxFiltroLabel = maxInfo.ciclo || "-";
+      base = skuSel === "Todos"
+        ? salesRows
+        : salesRows.filter(r => r.CodigoProduto === skuSel);
     } else {
-      const base = (skuSel === "Todos")
+      base = skuSel === "Todos"
         ? salesRows.filter(r => r.Ciclo === selectedCycle)
         : salesRows.filter(r => r.Ciclo === selectedCycle && r.CodigoProduto === skuSel);
+    }
 
-      const bySku = new Map();
-      for (const r of base) {
-        bySku.set(
-          r.CodigoProduto,
-          (bySku.get(r.CodigoProduto) || 0) + (r.QtdVendida || 0)
-        );
-      }
+    if (!base.length) {
+      // Se não houver dados, usa a média de 17 ciclos somente quando ciclo = Todos
+      mediaFiltro = selectedCycle === "Todos" ? media17 : 0;
+      return {
+        mediaTexto: Number(mediaFiltro || 0).toLocaleString("pt-BR", {
+          minimumFractionDigits: 0,
+          maximumFractionDigits: 2,
+        }),
+        maxQtdTexto: "0",
+        maxLabel: "-",
+      };
+    }
 
-      const arr = Array.from(bySku.values());
-      const total = arr.reduce((s, v) => s + v, 0);
-      const count = arr.length || 1;
-      mediaFiltro = total / count;
+    // Soma por SKU dentro da base filtrada
+    const bySku = new Map();
+    for (const r of base) {
+      bySku.set(
+        r.CodigoProduto,
+        (bySku.get(r.CodigoProduto) || 0) + (r.QtdVendida || 0)
+      );
+    }
 
-      let bestSku = { sku: "", qtd: 0 };
-      for (const [sku, qtd] of bySku.entries()) {
-        if (qtd > bestSku.qtd) bestSku = { sku, qtd };
-      }
+    const arr = Array.from(bySku.values());
+    const total = arr.reduce((s, v) => s + v, 0);
+    const count = arr.length || 1;
 
-      maxFiltroQtd = bestSku.qtd || 0;
+    // Quando ciclo = Todos, mantemos a média da janela (17 ciclos).
+    // Quando ciclo específico, usamos a média das vendas dos SKUs nesse ciclo.
+    mediaFiltro = selectedCycle === "Todos" ? media17 : (total / count);
 
-      // Usa a descrição do SKU em vez do código
-      if (bestSku.sku) {
-        let desc = "";
-        for (const r of rowsProcessed) {
-          if (r.CodigoProduto === bestSku.sku && r.DescricaoProduto) {
-            desc = r.DescricaoProduto;
-            break;
-          }
+    // Descobre o SKU com maior venda no filtro
+    let bestSku = { sku: "", qtd: 0 };
+    for (const [sku, qtd] of bySku.entries()) {
+      if (qtd > bestSku.qtd) bestSku = { sku, qtd };
+    }
+
+    maxFiltroQtd = bestSku.qtd || 0;
+
+    // Usa a descrição do SKU em vez do código
+    if (bestSku.sku) {
+      let desc = "";
+      for (const r of rowsProcessed) {
+        if (r.CodigoProduto === bestSku.sku && r.DescricaoProduto) {
+          desc = r.DescricaoProduto;
+          break;
         }
-        maxFiltroLabel = desc || bestSku.sku;
-      } else {
-        maxFiltroLabel = "-";
       }
+      maxFiltroLabel = desc || bestSku.sku;
     }
 
     return {
@@ -527,7 +548,7 @@ export default function DashboardEstoquePage() {
       maxQtdTexto: Number(maxFiltroQtd || 0).toLocaleString("pt-BR"),
       maxLabel: maxFiltroLabel,
     };
-  }, [media17, maxInfo, selectedCycle, skuSel, salesRows, rowsProcessed]);
+  }, [media17, selectedCycle, skuSel, salesRows, rowsProcessed]);
 
   /* ====== sku -> descrição ====== */
   const skuMeta = useMemo(() => {
@@ -696,7 +717,7 @@ export default function DashboardEstoquePage() {
       });
 
       // excessos/deficits
-      const sources = [];
+      const sources =[];
       const sinks = [];
       for (const [city, acc] of citiesMap.entries()) {
         const available = (acc.EstoqueAtual || 0) + (acc.EstoqueTransito || 0) - (acc.PendLiq || 0);
@@ -825,7 +846,7 @@ export default function DashboardEstoquePage() {
             <div className="leading-tight">
               <div className="text-sm text-white/70">BI Service Beta</div>
               <h1 className="text-xl font-bold">
-                <span className="text-white">Dashboard</span>{" "}
+                <span className="text:white">Dashboard</span>{" "}
                 <span style={{ color: C_GREEN }}>de Estoque</span>
               </h1>
             </div>
@@ -893,7 +914,7 @@ export default function DashboardEstoquePage() {
               setQuery("");
               setSkuSel("Todos");
               setSelectedCycle("Todos");
-              setSalesCityFilter("Todas"); // 🔹 reseta filtro de loja
+              setSalesCityFilter("Todas");
             }}
             className="rounded-lg px-3 py-2 text-sm font-medium"
             style={{ background:"rgba(148,163,184,.5)" }}
@@ -1006,7 +1027,7 @@ export default function DashboardEstoquePage() {
               onChange={(e)=>setSelectedCycle(e.target.value)}
               options={cycleOptions}
             />
-            {/* 🔹 novo filtro de LOJA/CIDADE nas vendas */}
+            {/* Filtro por cidade/loja nas vendas */}
             <SelectDark
               label="Loja (Cidade vendas)"
               value={salesCityFilter}
@@ -1031,7 +1052,6 @@ export default function DashboardEstoquePage() {
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <Kpi title="Média por ciclo (filtro)" value={resumoFiltro.mediaTexto} color={C_BLUE} raw />
                 <Kpi title="Máximo no filtro (Qtd)" value={resumoFiltro.maxQtdTexto} color={C_AMBER} raw />
-                {/* 🔹 fonte menor aqui */}
                 <Kpi title="Onde ocorreu o máximo" value={resumoFiltro.maxLabel} color={C_GREEN} raw size="sm" />
               </div>
             </Card>
@@ -1057,7 +1077,7 @@ export default function DashboardEstoquePage() {
         </Card>
       </div>
 
-      {/* ====== SUGESTÃO DE ESTOQUE MÍNIMO ====== */}
+     {/* ====== SUGESTÃO DE ESTOQUE MÍNIMO ====== */}
       <div className="max-w-7xl mx-auto px-6 mt-10 space-y-4">
         <Card
           title="Sugestão de Estoque Mínimo (17 ciclos)"
