@@ -830,6 +830,7 @@ export default function DashboardEstoquePage() {
     }
     return map;
   }, [rowsProcessed]);
+
   const skuClasse = useMemo(() => {
     const map = new Map();
     for (const r of rowsProcessed) {
@@ -854,45 +855,24 @@ export default function DashboardEstoquePage() {
     return map;
   }, [rowsProcessed]);
 
-  // Marca por SKU (para investimento por marca)
-  const skuMarca = useMemo(() => {
+  const skuPrecoSellIn = useMemo(() => {
     const map = new Map();
     for (const r of allRowsEstoque) {
-      if (r.CodigoProduto && r.Marca) {
+      if (r.CodigoProduto != null && r.CodigoProduto !== undefined) {
         const sku = String(r.CodigoProduto).trim();
         if (!sku) continue;
-        if (!map.has(sku)) {
-          map.set(sku, r.Marca);
+        const price = Number(r.PrecoSellIn ?? 0) || 0;
+        const current = map.get(sku);
+        if (price > 0) {
+          map.set(sku, price);
+        } else if (current === undefined) {
+          map.set(sku, price);
         }
       }
     }
     return map;
   }, [allRowsEstoque]);
 
-  // Preço por SKU + Cidade
-  const skuPrecoCidade = useMemo(() => {
-    const map = new Map(); // sku -> Map(cidade -> preço)
-    for (const r of allRowsEstoque) {
-      if (r.CodigoProduto == null) continue;
-      const sku = String(r.CodigoProduto).trim();
-      if (!sku) continue;
-      const cidade = (r.Cidade || "").trim();
-      if (!cidade) continue;
-
-      const price = Number(r.PrecoSellIn ?? 0) || 0;
-      if (!map.has(sku)) map.set(sku, new Map());
-      const inner = map.get(sku);
-
-      if (price > 0) {
-        inner.set(cidade, price);
-      } else if (!inner.has(cidade)) {
-        inner.set(cidade, price);
-      }
-    }
-    return map;
-  }, [allRowsEstoque]);
-
-  
   const skuOptions = useMemo(() => {
     if (!skuList || !skuList.length) return ["Todos"];
     return skuList.map((sku) => {
@@ -1041,17 +1021,11 @@ export default function DashboardEstoquePage() {
     return by;
   }, [rowsProcessed]);
 
-    const { transfers, buys, totalsPlan } = useMemo(() => {
+  const { transfers, buys, totalsPlan } = useMemo(() => {
     const transfers = [];
     const buys = [];
-
-    let totalTransfer = 0;      // qtd transferida (itens)
-    let totalBuy = 0;           // qtd comprada (itens)
-    let totalBuyValor = 0;      // investimento com transferências (R$)
-
-    let baseBuyQty = 0;         // qtd que seria comprada sem transferência
-    let baseBuyValor = 0;       // investimento sem transferências (R$)
-
+    let totalTransfer = 0;
+    let totalBuy = 0;
     let moves = 0;
 
     for (const rec of sugestaoMinimo) {
@@ -1075,7 +1049,6 @@ export default function DashboardEstoquePage() {
       const citiesMap = estoqueBySkuCity.get(sku);
       if (!citiesMap || !citiesMap.size) continue;
 
-      // Ponderação por vendas por cidade (ou igualitário)
       let weights = new Map();
       if (salesShareCity.has(sku) && salesShareCity.get(sku).size) {
         const shares = salesShareCity.get(sku);
@@ -1102,7 +1075,6 @@ export default function DashboardEstoquePage() {
         }
       }
 
-      // Distribuição do mínimo por cidade
       const cities = Array.from(citiesMap.keys());
       const targets = new Map();
       let assigned = 0;
@@ -1117,7 +1089,6 @@ export default function DashboardEstoquePage() {
 
       const sources = [];
       const sinks = [];
-
       for (const [city, acc] of citiesMap.entries()) {
         const available =
           (acc.EstoqueAtual || 0) +
@@ -1125,24 +1096,13 @@ export default function DashboardEstoquePage() {
           (acc.PendLiq || 0);
         const target = targets.get(city) || 0;
         const diff = available - target;
-
-        // CENÁRIO SEM TRANSFERÊNCIA -> tudo que faltar, eu compraria
-        if (diff < 0) {
-          const needed = -diff;
-          const priceMap = skuPrecoCidade.get(sku);
-          const valorUnitBase = priceMap?.get(city) || 0;
-          const valorTotalBase = valorUnitBase * needed;
-
-          baseBuyQty += needed;
-          baseBuyValor += valorTotalBase;
-
-          sinks.push({ city, qty: needed });
-        } else if (diff > 0) {
+        if (diff > 0) {
           sources.push({ city, qty: diff });
+        } else if (diff < 0) {
+          sinks.push({ city, qty: -diff });
         }
       }
 
-      // CENÁRIO COM TRANSFERÊNCIAS -> primeiro tenta cobrir com quem tem sobra
       let i = 0;
       let j = 0;
       while (i < sources.length && j < sinks.length) {
@@ -1164,46 +1124,29 @@ export default function DashboardEstoquePage() {
         if (sinks[j].qty === 0) j++;
       }
 
-      // O que ainda falta depois das transferências -> compra
       for (; j < sinks.length; j++) {
         const q = sinks[j].qty;
-        const city = sinks[j].city;
         if (q > 0) {
-          const priceMap = skuPrecoCidade.get(sku);
-          const valorUnit = priceMap?.get(city) || 0;
+          const valorUnit = skuPrecoSellIn.get(sku) || 0;
           const valorTotal = valorUnit * q;
 
           buys.push({
             SKU: sku,
             Descricao: desc,
-            Cidade: city,
+            Cidade: sinks[j].city,
             Qtd: q,
             ValorUnit: valorUnit,
             ValorTotal: valorTotal,
           });
-
           totalBuy += q;
-          totalBuyValor += valorTotal;
         }
       }
     }
 
-    const economiaValor = baseBuyValor - totalBuyValor;
-    const economiaQty = baseBuyQty - totalBuy;
-
     return {
       transfers,
       buys,
-      totalsPlan: {
-        totalTransfer,
-        totalBuy,
-        totalBuyValor,
-        baseBuyQty,
-        baseBuyValor,
-        economiaQty,
-        economiaValor,
-        moves,
-      },
+      totalsPlan: { totalTransfer, totalBuy, moves },
     };
   }, [
     sugestaoMinimo,
@@ -1211,7 +1154,7 @@ export default function DashboardEstoquePage() {
     salesShareCity,
     skuClasse,
     skuCategoria,
-    skuPrecoCidade,
+    skuPrecoSellIn,
     planCurveFilter,
     planCategoryFilter,
   ]);
@@ -1284,31 +1227,12 @@ export default function DashboardEstoquePage() {
     const map = new Map();
     for (const b of buysView) {
       const k = b.Cidade || "(sem cidade)";
-      const prev = map.get(k) || { Qtd: 0, Valor: 0 };
-      prev.Qtd += b.Qtd || 0;
-      prev.Valor += b.ValorTotal || 0;
-      map.set(k, prev);
+      map.set(k, (map.get(k) || 0) + (b.Qtd || 0));
     }
     return Array.from(map.entries())
-      .map(([Cidade, v]) => ({
-        Cidade,
-        Qtd: v.Qtd,
-        Valor: v.Valor,
-      }))
-      .sort((a, b) => b.Valor - a.Valor);
+      .map(([Cidade, Qtd]) => ({ Cidade, Qtd }))
+      .sort((a, b) => b.Qtd - a.Qtd);
   }, [buysView]);
-
-  const invPorMarca = useMemo(() => {
-    const map = new Map();
-    for (const b of buysView) {
-      const marca = skuMarca.get(b.SKU) || "SEM MARCA";
-      map.set(marca, (map.get(marca) || 0) + (b.ValorTotal || 0));
-    }
-    return Array.from(map.entries())
-      .map(([Marca, Valor]) => ({ Marca, Valor }))
-      .sort((a, b) => b.Valor - a.Valor);
-  }, [buysView, skuMarca]);
-
 
   function exportXlsx() {
     const wb = XLSX.utils.book_new();
@@ -1367,15 +1291,11 @@ export default function DashboardEstoquePage() {
     XLSX.utils.book_append_sheet(
       wb,
       XLSX.utils.json_to_sheet([
-                {
+        {
           TotalTransferir: totalsPlan.totalTransfer,
           Movimentos: totalsPlan.moves,
-          TotalComprarItens: totalsPlan.totalBuy,
-          InvestimentoComTransferencias: totalsPlan.totalBuyValor,
-          InvestimentoSemTransferencias: totalsPlan.baseBuyValor,
-          EconomiaValor: totalsPlan.economiaValor,
+          TotalComprar: totalsPlan.totalBuy,
         },
-
         {
           ModoDistribuicao:
             "vendas (fallback igualitário se sem vendas por cidade)",
@@ -2075,37 +1995,6 @@ export default function DashboardEstoquePage() {
               color={C_ROSE}
             />
           </div>
-		  
-		            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
-            <Kpi
-              title="Investimento com transferências (R$)"
-              value={totalsPlan.totalBuyValor.toLocaleString("pt-BR", {
-                style: "currency",
-                currency: "BRL",
-              })}
-              color={C_ROSE}
-              raw
-            />
-            <Kpi
-              title="Investimento sem transferências (R$)"
-              value={totalsPlan.baseBuyValor.toLocaleString("pt-BR", {
-                style: "currency",
-                currency: "BRL",
-              })}
-              color={C_AMBER}
-              raw
-            />
-            <Kpi
-              title="Economia obtida (R$)"
-              value={totalsPlan.economiaValor.toLocaleString("pt-BR", {
-                style: "currency",
-                currency: "BRL",
-              })}
-              color={C_GREEN}
-              raw
-            />
-          </div>
-
 
           {planTab === "transfer" ? (
             <>
@@ -2245,9 +2134,9 @@ export default function DashboardEstoquePage() {
             </>
           ) : (
             <>
-                           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
                 <Card
-                  title="Compras por Cidade (R$)"
+                  title="Compras por Cidade"
                   borderColor="rgba(239,68,68,.35)"
                 >
                   <div style={{ width: "100%", height: 300 }}>
@@ -2267,39 +2156,9 @@ export default function DashboardEstoquePage() {
                         <Tooltip />
                         <Legend />
                         <Bar
-                          dataKey="Valor"
-                          name="Investimento (R$)"
+                          dataKey="Qtd"
+                          name="Qtd a comprar"
                           fill={C_ROSE}
-                        />
-                      </BarChart>
-                    </ResponsiveContainer>
-                  </div>
-                </Card>
-
-                <Card
-                  title="Investimento por Marca (R$)"
-                  borderColor="rgba(239,68,68,.35)"
-                >
-                  <div style={{ width: "100%", height: 300 }}>
-                    <ResponsiveContainer width="100%" height={300}>
-                      <BarChart
-                        data={invPorMarca}
-                        margin={{
-                          left: 12,
-                          right: 12,
-                          top: 10,
-                          bottom: 10,
-                        }}
-                      >
-                        <CartesianGrid strokeDasharray="3 3" />
-                        <XAxis dataKey="Marca" />
-                        <YAxis />
-                        <Tooltip />
-                        <Legend />
-                        <Bar
-                          dataKey="Valor"
-                          name="Investimento (R$)"
-                          fill={C_BLUE}
                         />
                       </BarChart>
                     </ResponsiveContainer>
