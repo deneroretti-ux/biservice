@@ -1308,7 +1308,31 @@ export default function DashboardEstoquePage() {
       .map(([Marca, Valor]) => ({ Marca, Valor }))
       .sort((a, b) => b.Valor - a.Valor);
   }, [buysView, skuMarca]);
+  const buysTopSku = useMemo(() => {
+    const map = new Map();
 
+    for (const b of buysView) {
+      const sku = b.SKU || "";
+      if (!sku) continue;
+
+      const key = sku;
+      const atual = map.get(key) || {
+        SKU: b.SKU,
+        Descricao: b.Descricao || "",
+        Qtd: 0,
+        ValorTotal: 0,
+      };
+
+      atual.Qtd += b.Qtd || 0;
+      atual.ValorTotal += b.ValorTotal || 0;
+
+      map.set(key, atual);
+    }
+
+    return Array.from(map.values())
+      .sort((a, b) => (b.ValorTotal || 0) - (a.ValorTotal || 0))
+      .slice(0, 10);
+  }, [buysView]);
 
   function exportXlsx() {
     const wb = XLSX.utils.book_new();
@@ -2306,6 +2330,76 @@ export default function DashboardEstoquePage() {
                   </div>
                 </Card>
               </div>
+			  
+			  {/* Top 10 SKUs que mais consomem investimento */}
+              <div className="mt-4">
+                <Card
+                  title="Top 10 SKUs para Comprar (R$)"
+                  borderColor="rgba(239,68,68,0.35)"
+                >
+                  <div
+                    className="overflow-auto rounded-lg"
+                    style={{ border: `1px solid ${C_CARD_BORDER}` }}
+                  >
+                    <table className="w-full text-sm">
+                      <thead className="bg-white/5">
+                        <tr>
+                          {[
+                            "SKU",
+                            "Descrição",
+                            "Qtd a comprar",
+                            "Investimento (R$)",
+                          ].map((h) => (
+                            <th
+                              key={h}
+                              className="text-left px-3 py-2 font-medium"
+                            >
+                              {h}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {buysTopSku.length ? (
+                          buysTopSku.map((r) => (
+                            <tr
+                              key={r.SKU}
+                              className="border-t"
+                              style={{ borderColor: C_CARD_BORDER }}
+                            >
+                              <td className="px-3 py-2 whitespace-nowrap">
+                                {r.SKU}
+                              </td>
+                              <td className="px-3 py-2">{r.Descricao}</td>
+                              <td className="px-3 py-2 text-right">
+                                {r.Qtd}
+                              </td>
+                              <td className="px-3 py-2 text-right">
+                                {(r.ValorTotal ?? 0).toLocaleString(
+                                  "pt-BR",
+                                  {
+                                    style: "currency",
+                                    currency: "BRL",
+                                  }
+                                )}
+                              </td>
+                            </tr>
+                          ))
+                        ) : (
+                          <tr
+                            className="border-t"
+                            style={{ borderColor: C_CARD_BORDER }}
+                          >
+                            <td className="px-3 py-4" colSpan={4}>
+                              Nenhuma compra necessária.
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </Card>
+              </div>
 
               {showPlanDetail && (
                 <div
@@ -2392,6 +2486,7 @@ export default function DashboardEstoquePage() {
           )}
         </Card>
       </div>
+	  
 
       <style jsx global>{`
         @media print {
