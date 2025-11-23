@@ -1509,7 +1509,7 @@ export default function DashboardEstoquePage() {
           </div>
         )}
       </header>
-
+	  
       {isLoading && (
         <div className="fixed inset-0 z-10 bg-black/60 backdrop-blur-sm grid place-items-center no-print">
           <div
