@@ -245,76 +245,6 @@ export default function DashboardEstoquePage() {
   useEffect(() => {
     (async () => setPdvMap(await fetchPdvCityMapLocal()))();
   }, []);
-  
-  useEffect(() => {
-  if (typeof window === "undefined") return;
-
-  try {
-    const estStr = window.localStorage.getItem("dashboardEstoque_allRowsEstoque");
-    const venStr = window.localStorage.getItem("dashboardEstoque_salesRowsAll");
-
-    if (!estStr || !venStr) return;
-
-    const estoqueSaved = JSON.parse(estStr);
-    const vendasSaved = JSON.parse(venStr);
-
-    if (Array.isArray(estoqueSaved)) {
-      setAllRowsEstoque(estoqueSaved);
-    }
-    if (Array.isArray(vendasSaved)) {
-      setSalesRowsAll(vendasSaved);
-    }
-
-    setBrandFilter("Todas");
-  } catch (e) {
-    console.error("Erro ao carregar último upload do estoque:", e);
-  }
-}, []);
-  
-  useEffect(() => {
-  if (typeof window === "undefined") return;
-
-  try {
-    const estStr = window.localStorage.getItem("estoque_allRowsEstoque");
-    const venStr = window.localStorage.getItem("estoque_salesRowsAll");
-
-    if (estStr && venStr) {
-      const estoqueSaved = JSON.parse(estStr);
-      const vendasSaved = JSON.parse(venStr);
-
-      if (Array.isArray(estoqueSaved)) {
-        setAllRowsEstoque(estoqueSaved);
-      }
-      if (Array.isArray(vendasSaved)) {
-        setSalesRowsAll(vendasSaved);
-      }
-
-      setBrandFilter("Todas");
-    }
-  } catch (e) {
-    console.error("Erro ao carregar dados do último upload de estoque:", e);
-  }
-}, []);
-  
-useEffect(() => {
-  if (typeof window === "undefined") return;
-
-  try {
-    const estStr = window.localStorage.getItem("BIService_estoqueAll");
-    const venStr = window.localStorage.getItem("BIService_vendasAll");
-
-    if (estStr && venStr) {
-      const estoqueAll = JSON.parse(estStr);
-      const vendasAll = JSON.parse(venStr);
-
-      setAllRowsEstoque(estoqueAll || []);
-      setSalesRowsAll(vendasAll || []);
-      setBrandFilter("Todas");
-    }
-  } catch (e) {
-    console.error("Erro ao carregar dados salvos do estoque:", e);
-  }
-}, []);
 
   async function onUpload(e) {
     const file = e.target.files?.[0];
@@ -344,40 +274,19 @@ useEffect(() => {
       setProgress(70);
       const wb = XLSX.read(buf, { type: "array" });
 
-setStatus("Processando abas de estoque…");
-setProgress(85);
-const estoqueAll = computeFromWorkbookEstoqueLocal(wb, pdvMap);
+      setStatus("Processando abas de estoque…");
+      setProgress(85);
+      const estoqueAll = computeFromWorkbookEstoqueLocal(wb, pdvMap);
 
-setStatus("Processando abas de vendas…");
-setProgress(92);
-const vendasAll = extractSalesRowsAllLocal(wb, pdvMap);
+      setStatus("Processando abas de vendas…");
+      setProgress(92);
+      const vendasAll = extractSalesRowsAllLocal(wb, pdvMap);
 
-// atualiza tela
-setAllRowsEstoque(estoqueAll);
-setSalesRowsAll(vendasAll);
-setBrandFilter("Todas");
-
-// 🔹 salva o último upload para reusar depois
-try {
-  if (typeof window !== "undefined") {
-    window.localStorage.setItem(
-      "dashboardEstoque_allRowsEstoque",
-      JSON.stringify(estoqueAll || [])
-    );
-    window.localStorage.setItem(
-      "dashboardEstoque_salesRowsAll",
-      JSON.stringify(vendasAll || [])
-    );
-  }
-} catch (e) {
-  console.error("Erro ao salvar dados do estoque no localStorage:", e);
-}
-
-setStatus("Finalizando…");
-setProgress(100);
-
-
-
+      setAllRowsEstoque(estoqueAll);
+      setSalesRowsAll(vendasAll);
+      setBrandFilter("Todas");
+      setStatus("Finalizando…");
+      setProgress(100);
     } catch (err) {
       console.error(err);
       setError(err?.message || "Falha ao processar o arquivo");
@@ -1532,64 +1441,53 @@ setProgress(100);
             </div>
           </div>
 
-<div className="flex items-center gap-2 no-print">
-  <label
-    className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium shadow"
-    style={{ background: C_GREEN }}
-  >
-    <svg
-      width="16"
-      height="16"
-      viewBox="0 0 24 24"
-      className="opacity-90"
-    >
-      <path
-        fill="currentColor"
-        d="M19 15v4H5v-4H3v6h18v-6zM11 3v10.17l-3.59-3.58L6 11l6 6l6-6l-1.41-1.41L13 13.17V3z"
-      />
-    </svg>
-    Upload local
-    <input
-      ref={fileRef}
-      type="file"
-      accept=".xlsx,.xls"
-      onChange={onUpload}
-      className="hidden"
-    />
-  </label>
-
-  {/* 🔹 NOVO BOTÃO - CONFERÊNCIA */}
-  <a
-    href="/dashboard"
-    className="rounded-lg px-3 py-2 text-sm font-medium shadow"
-    style={{ background: C_PURPLE }}
-  >
-    Conferência
-  </a>
-
-  <button
-    onClick={exportXlsx}
-    className="rounded-lg px-3 py-2 text-sm font-medium shadow"
-    style={{ background: C_BLUE }}
-  >
-    Exportar XLSX
-  </button>
-
-  <a
-    href="/"
-    className="rounded-lg px-3 py-2 text-sm font-medium shadow inline-flex items-center gap-2"
-    style={{ background: C_ROSE }}
-  >
-    Sair
-    <svg width="16" height="16" viewBox="0 0 24 24">
-      <path
-        fill="currentColor"
-        d="M12 4l1.41 1.41L9.83 9H20v2H9.83l3.58 3.59L12 16l-6-6z"
-      />
-    </svg>
-  </a>
-</div>
-
+          <div className="flex items-center gap-2 no-print">
+            <label
+              className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium shadow"
+              style={{ background: C_GREEN }}
+            >
+              <svg
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                className="opacity-90"
+              >
+                <path
+                  fill="currentColor"
+                  d="M19 15v4H5v-4H3v6h18v-6zM11 3v10.17l-3.59-3.58L6 11l6 6l6-6l-1.41-1.41L13 13.17V3z"
+                />
+              </svg>
+              Upload local
+              <input
+                ref={fileRef}
+                type="file"
+                accept=".xlsx,.xls"
+                onChange={onUpload}
+                className="hidden"
+              />
+            </label>
+			
+		<a
+			href="/dashboard"
+			className="rounded-lg px-3 py-2 text-sm font-medium shadow"
+			style={{ background: C_PURPLE }}
+			>
+			Conferência
+		</a>
+            <a
+              href="/"
+              className="rounded-lg px-3 py-2 text-sm font-medium shadow inline-flex items-center gap-2"
+              style={{ background: C_ROSE }}
+            >
+              Sair
+              <svg width="16" height="16" viewBox="0 0 24 24">
+                <path
+                  fill="currentColor"
+                  d="M12 4l1.41 1.41L9.83 9H20v2H9.83l3.58 3.59L12 16l-6-6z"
+                />
+              </svg>
+            </a>
+          </div>
         </div>
 
         {isLoading && (
