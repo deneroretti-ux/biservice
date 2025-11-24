@@ -1782,14 +1782,29 @@ export default function DashboardEstoquePage() {
 
   function exportPlanXlsx() {
     const wb = XLSX.utils.book_new();
+
+    // Transferências com Classe e Categoria
+    const transfersExport = transfersView.map((r) => ({
+      ...r,
+      Classe: skuClasse.get(r.SKU) || "",
+      Categoria: skuCategoria.get(r.SKU) || "",
+    }));
+
+    // Compras com Classe e Categoria
+    const buysExport = buysView.map((r) => ({
+      ...r,
+      Classe: skuClasse.get(r.SKU) || "",
+      Categoria: skuCategoria.get(r.SKU) || "",
+    }));
+
     XLSX.utils.book_append_sheet(
       wb,
-      XLSX.utils.json_to_sheet(transfersView),
+      XLSX.utils.json_to_sheet(transfersExport),
       "Transferencias"
     );
     XLSX.utils.book_append_sheet(
       wb,
-      XLSX.utils.json_to_sheet(buysView),
+      XLSX.utils.json_to_sheet(buysExport),
       "Compras"
     );
     XLSX.utils.book_append_sheet(
@@ -1820,6 +1835,7 @@ export default function DashboardEstoquePage() {
     );
     XLSX.writeFile(wb, "plano_transferencia_compra.xlsx");
   }
+
 
   function exportPromoXlsx() {
     const wb = XLSX.utils.book_new();
