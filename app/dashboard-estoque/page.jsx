@@ -1151,6 +1151,32 @@ export default function DashboardEstoquePage() {
     }
     return map;
   }, [allRowsEstoque]);
+  
+      // Estoque global detalhado por SKU (Atual, Trânsito, Pendentes)
+  const estoqueComponentesBySku = useMemo(() => {
+    const map = new Map();
+
+    for (const r of allRowsEstoque) {
+      if (!r.CodigoProduto) continue;
+      const sku = String(r.CodigoProduto).trim();
+      if (!sku) continue;
+
+      const prev =
+        map.get(sku) || {
+          EstoqueAtual: 0,
+          EstoqueTransito: 0,
+          PendentesLiquidos: 0,
+        };
+
+      prev.EstoqueAtual += r.EstoqueAtual || 0;
+      prev.EstoqueTransito += r.EstoqueTransito || 0;
+      prev.PendentesLiquidos += r.PendentesLiquidos || 0;
+
+      map.set(sku, prev);
+    }
+
+    return map;
+  }, [allRowsEstoque]);
 
   // Metadados de promoção (descobre ciclo atual/prox a partir das promoções)
   const promoMeta = useMemo(() => {
@@ -1190,7 +1216,6 @@ export default function DashboardEstoquePage() {
     return { perSku, nextPromoCycle, currentCycle, nextCycleShort };
   }, [allRowsEstoque]);
 
-  // Sugestão de compra específica para SKUs em promoção (próximo ciclo)
   const promoSuggestions = useMemo(() => {
     const out = [];
     if (!promoMeta.nextPromoCycle) return out;
@@ -1222,7 +1247,19 @@ export default function DashboardEstoquePage() {
         Math.round(baseMin * fatorPromo * fatorClasse)
       );
 
-      const disponivel = estoqueGlobalBySku.get(sku) || 0;
+      // componentes de estoque global
+      const comp =
+        estoqueComponentesBySku.get(sku) || {
+          EstoqueAtual: 0,
+          EstoqueTransito: 0,
+          PendentesLiquidos: 0,
+        };
+
+      const disponivel =
+        (comp.EstoqueAtual || 0) +
+        (comp.EstoqueTransito || 0) -
+        (comp.PendentesLiquidos || 0);
+
       const qtdComprar = Math.max(0, alvo - disponivel);
       if (qtdComprar <= 0) continue;
 
@@ -1251,6 +1288,12 @@ export default function DashboardEstoquePage() {
         Desconto: desconto,
         EstoqueMinBase: baseMin,
         EstoqueAlvoPromo: alvo,
+
+        // novos campos para exportação
+        EstoqueAtualGlobal: comp.EstoqueAtual || 0,
+        EstoqueTransitoGlobal: comp.EstoqueTransito || 0,
+        PendentesLiquidosGlobal: comp.PendentesLiquidos || 0,
+
         EstoqueDisponivel: disponivel,
         QtdSugerida: qtdComprar,
         PrecoUnitPromo: precoPromo,
@@ -1260,7 +1303,14 @@ export default function DashboardEstoquePage() {
 
     out.sort((a, b) => (b.ValorTotal || 0) - (a.ValorTotal || 0));
     return out;
-  }, [sugestaoMinimo, promoMeta, estoqueGlobalBySku, skuClasse, skuPrecoCidade]);
+  }, [
+    sugestaoMinimo,
+    promoMeta,
+    estoqueComponentesBySku,
+    skuClasse,
+    skuPrecoCidade,
+  ]);
+
 
   // Totais base (sem filtros de visualização)
   const promoTotals = useMemo(() => {
@@ -1780,85 +1830,128 @@ export default function DashboardEstoquePage() {
     XLSX.writeFile(wb, "dashboard_estoque.xlsx");
   }
 
-  function exportPlanXlsx() {
-    const wb = XLSX.utils.book_new();
+function exportPlanXlsx() {
+  const wb = XLSX.utils.book_new();
 
-    // Transferências com Classe e Categoria
-    const transfersExport = transfersView.map((r) => ({
+  // Transferências com Classe e Categoria
+  const transfersExport = transfersView.map((r) => ({
+    ...r,
+    Classe: skuClasse.get(r.SKU) || "",
+    Categoria: skuCategoria.get(r.SKU) || "",
+  }));
+
+  // Compras com Classe, Categoria e componentes de estoque
+  const buysExport = buysView.map((r) => {
+    const comp =
+      estoqueComponentesBySku.get(r.SKU) || {
+        EstoqueAtual: 0,
+        EstoqueTransito: 0,
+        PendentesLiquidos: 0,
+      };
+
+    const disponivel =
+      (comp.EstoqueAtual || 0) +
+      (comp.EstoqueTransito || 0) -
+      (comp.PendentesLiquidos || 0);
+
+    return {
       ...r,
       Classe: skuClasse.get(r.SKU) || "",
       Categoria: skuCategoria.get(r.SKU) || "",
-    }));
+      EstoqueAtualGlobal: comp.EstoqueAtual || 0,
+      EstoqueTransitoGlobal: comp.EstoqueTransito || 0,
+      PendentesLiquidosGlobal: comp.PendentesLiquidos || 0,
+      EstoqueDisponivelGlobal: disponivel,
+    };
+  });
 
-    // Compras com Classe e Categoria
-    const buysExport = buysView.map((r) => ({
-      ...r,
-      Classe: skuClasse.get(r.SKU) || "",
-      Categoria: skuCategoria.get(r.SKU) || "",
-    }));
+  XLSX.utils.book_append_sheet(
+    wb,
+    XLSX.utils.json_to_sheet(transfersExport),
+    "Transferencias"
+  );
+  XLSX.utils.book_append_sheet(
+    wb,
+    XLSX.utils.json_to_sheet(buysExport),
+    "Compras"
+  );
+  XLSX.utils.book_append_sheet(
+    wb,
+    XLSX.utils.json_to_sheet([
+      {
+        TotalTransferir: totalsPlan.totalTransfer,
+        Movimentos: totalsPlan.moves,
+        TotalComprarItens: totalsPlan.totalBuy,
+        InvestimentoComTransferencias: totalsPlan.totalBuyValor,
+        InvestimentoSemTransferencias: totalsPlan.baseBuyValor,
+        EconomiaValor: totalsPlan.economiaValor,
+      },
+      {
+        ModoDistribuicao:
+          "vendas (fallback igualitário se sem vendas por cidade)",
+        CidadeFiltroPlano: planCityFilter,
+        MarcaFiltro: brandFilter,
+        ClasseFiltroPlano: planCurveFilter,
+        CategoriaFiltroPlano: planCategoryFilter,
+        HorizonteDias: Number(planDays) || 0,
+        DesativacaoFiltroPlano: planDesativMode,
+        ComprasDesativados: buyDesativMode,
+      },
+    ]),
+    "Resumo"
+  );
 
-    XLSX.utils.book_append_sheet(
-      wb,
-      XLSX.utils.json_to_sheet(transfersExport),
-      "Transferencias"
-    );
-    XLSX.utils.book_append_sheet(
-      wb,
-      XLSX.utils.json_to_sheet(buysExport),
-      "Compras"
-    );
-    XLSX.utils.book_append_sheet(
-      wb,
-      XLSX.utils.json_to_sheet([
-        {
-          TotalTransferir: totalsPlan.totalTransfer,
-          Movimentos: totalsPlan.moves,
-          TotalComprarItens: totalsPlan.totalBuy,
-          InvestimentoComTransferencias: totalsPlan.totalBuyValor,
-          InvestimentoSemTransferencias: totalsPlan.baseBuyValor,
-          EconomiaValor: totalsPlan.economiaValor,
-        },
-
-        {
-          ModoDistribuicao:
-            "vendas (fallback igualitário se sem vendas por cidade)",
-          CidadeFiltroPlano: planCityFilter,
-          MarcaFiltro: brandFilter,
-          ClasseFiltroPlano: planCurveFilter,
-          CategoriaFiltroPlano: planCategoryFilter,
-          HorizonteDias: Number(planDays) || 0,
-          DesativacaoFiltroPlano: planDesativMode,
-          ComprasDesativados: buyDesativMode,
-        },
-      ]),
-      "Resumo"
-    );
-    XLSX.writeFile(wb, "plano_transferencia_compra.xlsx");
-  }
-
+  XLSX.writeFile(wb, "plano_transferencia_compra.xlsx");
+}
 
   function exportPromoXlsx() {
+    if (!promoSuggestionsView.length) return;
+
     const wb = XLSX.utils.book_new();
+
+    // Detalhe por SKU (incluindo componentes de estoque)
+    const promoExport = promoSuggestionsView.map((r) => ({
+      SKU: r.SKU,
+      Descricao: r.Descricao,
+      Classe: r.Classe,
+      Categoria: skuCategoria.get(r.SKU) || "",
+      DescontoPercent: r.Desconto,
+      EstoqueMinBase: r.EstoqueMinBase,
+      EstoqueAlvoPromo: r.EstoqueAlvoPromo,
+
+      EstoqueAtualGlobal: r.EstoqueAtualGlobal || 0,
+      EstoqueTransitoGlobal: r.EstoqueTransitoGlobal || 0,
+      PendentesLiquidosGlobal: r.PendentesLiquidosGlobal || 0,
+      EstoqueDisponivel: r.EstoqueDisponivel || 0,
+
+      QtdSugerida: r.QtdSugerida,
+      PrecoUnitPromo: r.PrecoUnitPromo,
+      ValorTotal: r.ValorTotal,
+    }));
+
     XLSX.utils.book_append_sheet(
       wb,
-      XLSX.utils.json_to_sheet(promoSuggestionsView),
-      "Promo_Sugestoes"
+      XLSX.utils.json_to_sheet(promoExport),
+      "Sugestao_Promocao"
     );
+
+    // Resumo + filtros atuais do card
     XLSX.utils.book_append_sheet(
       wb,
       XLSX.utils.json_to_sheet([
         {
           HorizonteDias: Number(promoHorizonDays) || 0,
-          CurvaFiltro: promoCurveFilter,
           SkuFiltro: promoSkuFilter,
           TotalSkus: promoTotalsView.totalSkus,
           TotalQtd: promoTotalsView.totalQtd,
           TotalValor: promoTotalsView.totalValor,
+          NextPromoCycle: promoMeta.nextPromoCycle || null,
         },
       ]),
       "Resumo"
     );
-    XLSX.writeFile(wb, "sugestoes_compra_promocao.xlsx");
+
+    XLSX.writeFile(wb, "sugestao_compra_promocao.xlsx");
   }
 
   function handlePrint() {
