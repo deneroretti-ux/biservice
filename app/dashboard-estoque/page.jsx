@@ -20,6 +20,7 @@ import * as XLSX from "xlsx";
 
 /* ====== CONFIG ====== */
 const CYCLE_WINDOW = 17;
+const CURRENT_CYCLE = 16; // ciclo atual para lógica de desativação
 const BRAND_OPTIONS = ["Todas", "BOTICARIO", "EUDORA", "QUEM DISSE BERENICE"];
 
 const SALES_CITY_OPTIONS = [
@@ -132,17 +133,55 @@ function percentile(values, p) {
     : arr[base];
 }
 
+function parseCycleFromDesativ(v) {
+  if (v == null) return null;
+  const m = String(v).match(/\d+/); // pega primeiro número (ex: "C15" -> 15)
+  if (!m) return null;
+  const num = Number(m[0]);
+  return Number.isNaN(num) ? null : num;
+}
+
+// lê campo "Promoção Próximo Ciclo"
+function parsePromoInfo(value) {
+  if (value == null) {
+    return { cicloPromo: null, descontoPercent: null };
+  }
+  const s = String(value);
+
+  // Ex.: "202516 - 40%" -> captura "202516"
+  const mCycle = s.match(/20\d{4}/);
+  const cicloPromo = mCycle ? Number(mCycle[0]) : null;
+
+  // Ex.: "40%" ou "40,0%" -> captura 40
+  const mDesc = s.match(/(\d+[\.,]?\d*)\s*%/);
+  let descontoPercent = null;
+  if (mDesc) {
+    const num = Number(mDesc[1].replace(",", "."));
+    if (!Number.isNaN(num)) {
+      descontoPercent = num;
+    }
+  }
+
+  return { cicloPromo, descontoPercent };
+}
+
 /* ====== UI ====== */
 function Card({ title, borderColor = C_CARD_BORDER, children, right = null }) {
+  const hasHeader = Boolean(title) || Boolean(right);
+
   return (
     <section
       className="rounded-2xl p-4 shadow-sm"
       style={{ border: `1px solid ${borderColor}`, background: C_CARD_BG }}
     >
-      <div className="flex items-end justify-between gap-3 mb-3">
-        <h2 className="text-lg font-semibold">{title}</h2>
-        {right}
-      </div>
+      {hasHeader && (
+        <div className="flex items-end justify-between gap-3 mb-3">
+          {title && (
+            <h2 className="text-lg font-semibold">{title}</h2>
+          )}
+          {right}
+        </div>
+      )}
       {children}
     </section>
   );
@@ -241,6 +280,15 @@ export default function DashboardEstoquePage() {
   const [planCityFilter, setPlanCityFilter] = useState("Todas");
   const [planCurveFilter, setPlanCurveFilter] = useState("Todas");
   const [planCategoryFilter, setPlanCategoryFilter] = useState("Todas");
+  const [planDays, setPlanDays] = useState("21"); // horizonte em dias (~1 ciclo)
+  const [planDesativMode, setPlanDesativMode] = useState("todos"); // opção 4
+  const [buyDesativMode, setBuyDesativMode] = useState("excluir"); // opção 2
+
+  // Promoções - filtros / controles do card
+  const [promoSkuFilter, setPromoSkuFilter] = useState("Todos");
+  const [promoCurveFilter, setPromoCurveFilter] = useState("Todas");
+  const [promoHorizonDays, setPromoHorizonDays] = useState("21");
+  const [showPromoDetail, setShowPromoDetail] = useState(false);
 
   useEffect(() => {
     (async () => setPdvMap(await fetchPdvCityMapLocal()))();
@@ -394,6 +442,24 @@ export default function DashboardEstoquePage() {
         "categoria do produto",
       ]);
 
+      const desativCol = findCol([
+        "desativacao",
+        "desativação",
+        "desativ",
+        "desativar",
+        "desativado",
+      ]);
+
+      const promoCol = findCol([
+        "promocao proximo ciclo",
+        "promocao proximo",
+        "promocao prox ciclo",
+        "promocao prox",
+        "promoção próximo ciclo",
+        "promoção proximo ciclo",
+        "promoção prox ciclo",
+      ]);
+
       if (!skuCol) continue;
 
       const marca = brandFromSheetName(sheetName);
@@ -430,6 +496,12 @@ export default function DashboardEstoquePage() {
           ? Number(r?.[precoSellInCol] ?? 0) || 0
           : 0;
 
+        const rawDesativ = desativCol ? r?.[desativCol] : null;
+        const desativCycle = parseCycleFromDesativ(rawDesativ);
+
+        const rawPromo = promoCol ? r?.[promoCol] : null;
+        const { cicloPromo, descontoPercent } = parsePromoInfo(rawPromo);
+
         tmpRows.push({
           Marca: marca,
           Aba: sheetName,
@@ -444,6 +516,11 @@ export default function DashboardEstoquePage() {
           EstoqueTransito: trans,
           PedidosPendentes: pend,
           PendentesLiquidos: pendLiquido,
+          Desativacao: rawDesativ,
+          DesativacaoCiclo: desativCycle,
+          PromocaoTexto: rawPromo,
+          PromoCiclo: cicloPromo,
+          PromoDescontoPercent: descontoPercent,
         });
       }
 
@@ -830,6 +907,7 @@ export default function DashboardEstoquePage() {
     }
     return map;
   }, [rowsProcessed]);
+
   const skuClasse = useMemo(() => {
     const map = new Map();
     for (const r of rowsProcessed) {
@@ -853,6 +931,24 @@ export default function DashboardEstoquePage() {
     }
     return map;
   }, [rowsProcessed]);
+
+  const skuDesativacao = useMemo(() => {
+    const map = new Map();
+    for (const r of allRowsEstoque) {
+      if (!r.CodigoProduto) continue;
+      if (r.DesativacaoCiclo == null) continue;
+
+      const sku = String(r.CodigoProduto).trim();
+      const ciclo = Number(r.DesativacaoCiclo);
+      if (!ciclo || Number.isNaN(ciclo)) continue;
+
+      const atual = map.get(sku);
+      if (atual == null || ciclo < atual) {
+        map.set(sku, ciclo);
+      }
+    }
+    return map;
+  }, [allRowsEstoque]);
 
   // Marca por SKU (para investimento por marca)
   const skuMarca = useMemo(() => {
@@ -1040,23 +1136,318 @@ export default function DashboardEstoquePage() {
     return by;
   }, [rowsProcessed]);
 
+  // Estoque global por SKU (para saber quanto já existe vs alvo)
+  const estoqueGlobalBySku = useMemo(() => {
+    const map = new Map();
+    for (const r of allRowsEstoque) {
+      if (!r.CodigoProduto) continue;
+      const sku = String(r.CodigoProduto).trim();
+      if (!sku) continue;
+      const disponivel =
+        (r.EstoqueAtual || 0) +
+        (r.EstoqueTransito || 0) -
+        (r.PendentesLiquidos || 0);
+      map.set(sku, (map.get(sku) || 0) + disponivel);
+    }
+    return map;
+  }, [allRowsEstoque]);
+
+  // Metadados de promoção (descobre ciclo atual/prox a partir das promoções)
+  const promoMeta = useMemo(() => {
+    let nextPromoCycle = null; // ex: 202516
+    const perSku = new Map(); // sku -> { cicloPromo, descontoPercent }
+
+    for (const r of allRowsEstoque) {
+      if (!r.CodigoProduto) continue;
+      const sku = String(r.CodigoProduto).trim();
+      if (!sku) continue;
+
+      const ciclo = r.PromoCiclo;
+      const desconto = r.PromoDescontoPercent;
+      if (!ciclo) continue;
+
+      perSku.set(sku, {
+        cicloPromo: ciclo,
+        descontoPercent: desconto,
+      });
+
+      if (nextPromoCycle == null || ciclo < nextPromoCycle) {
+        nextPromoCycle = ciclo;
+      }
+    }
+
+    let currentCycle = null;
+    let nextCycleShort = null;
+
+    if (nextPromoCycle != null) {
+      const n = Number(nextPromoCycle);
+      if (!Number.isNaN(n)) {
+        nextCycleShort = n % 100; // 16
+        currentCycle = nextCycleShort - 1; // 15
+      }
+    }
+
+    return { perSku, nextPromoCycle, currentCycle, nextCycleShort };
+  }, [allRowsEstoque]);
+
+  // Sugestão de compra específica para SKUs em promoção (próximo ciclo)
+  const promoSuggestions = useMemo(() => {
+    const out = [];
+    if (!promoMeta.nextPromoCycle) return out;
+
+    for (const rec of sugestaoMinimo) {
+      const sku = rec.SKU;
+      const meta = promoMeta.perSku.get(sku);
+      if (!meta) continue;
+
+      const baseMin = rec.EstoqueMinimoSugerido || 0;
+      if (baseMin <= 0) continue;
+
+      const desconto = meta.descontoPercent || 0;
+      const classe = skuClasse.get(sku) || "";
+
+      // boost por curva
+      let fatorClasse = 1;
+      const clsUpper = classe.toUpperCase();
+      if (clsUpper.startsWith("A")) fatorClasse = 1.5;
+      else if (clsUpper.startsWith("B")) fatorClasse = 1.2;
+      else if (clsUpper.startsWith("C")) fatorClasse = 1.0;
+      else fatorClasse = 0.8;
+
+      // boost por desconto
+      const fatorPromo = 1 + desconto / 100;
+
+      const alvo = Math.max(
+        baseMin,
+        Math.round(baseMin * fatorPromo * fatorClasse)
+      );
+
+      const disponivel = estoqueGlobalBySku.get(sku) || 0;
+      const qtdComprar = Math.max(0, alvo - disponivel);
+      if (qtdComprar <= 0) continue;
+
+      // preço médio SKU (sell in)
+      let precoBase = 0;
+      const priceMap = skuPrecoCidade.get(sku);
+      if (priceMap && priceMap.size) {
+        for (const v of priceMap.values()) {
+          if (v > 0) {
+            precoBase = v;
+            break;
+          }
+        }
+        if (precoBase === 0) {
+          precoBase = Array.from(priceMap.values())[0] || 0;
+        }
+      }
+
+      const precoPromo = precoBase * (1 - desconto / 100);
+      const valorTotal = qtdComprar * precoPromo;
+
+      out.push({
+        SKU: sku,
+        Descricao: rec.Descricao,
+        Classe: classe,
+        Desconto: desconto,
+        EstoqueMinBase: baseMin,
+        EstoqueAlvoPromo: alvo,
+        EstoqueDisponivel: disponivel,
+        QtdSugerida: qtdComprar,
+        PrecoUnitPromo: precoPromo,
+        ValorTotal: valorTotal,
+      });
+    }
+
+    out.sort((a, b) => (b.ValorTotal || 0) - (a.ValorTotal || 0));
+    return out;
+  }, [sugestaoMinimo, promoMeta, estoqueGlobalBySku, skuClasse, skuPrecoCidade]);
+
+  // Totais base (sem filtros de visualização)
+  const promoTotals = useMemo(() => {
+    let totalQtd = 0;
+    let totalValor = 0;
+    for (const r of promoSuggestions) {
+      totalQtd += r.QtdSugerida || 0;
+      totalValor += r.ValorTotal || 0;
+    }
+    return {
+      totalQtd,
+      totalValor,
+      totalSkus: promoSuggestions.length,
+    };
+  }, [promoSuggestions]);
+
+  // Opções de SKU para o filtro do card de promoção
+  const promoSkuOptions = useMemo(() => {
+    if (!promoSuggestions || !promoSuggestions.length) {
+      return [{ value: "Todos", label: "Todos" }];
+    }
+
+    const skus = Array.from(
+      new Set(promoSuggestions.map((r) => r.SKU))
+    ).sort((a, b) => a.localeCompare(b));
+
+    return [
+      { value: "Todos", label: "Todos" },
+      ...skus.map((sku) => ({
+        value: sku,
+        label: `${sku} - ${
+          sugestaoMinimo.find((x) => x.SKU === sku)?.Descricao || ""
+        }`,
+      })),
+    ];
+  }, [promoSuggestions, sugestaoMinimo]);
+
+  // Opções de curva para o card de promoção
+  const promoCurveOptions = useMemo(() => {
+    if (!promoSuggestions || !promoSuggestions.length) {
+      return ["Todas"];
+    }
+    const set = new Set();
+    for (const r of promoSuggestions) {
+      const cls = (r.Classe || "").trim();
+      if (cls) set.add(cls);
+    }
+    return ["Todas", ...Array.from(set).sort((a, b) => a.localeCompare(b))];
+  }, [promoSuggestions]);
+
+  // Aplicar filtro por curva, SKU e horizonte (dias) na visualização de promo
+  const promoSuggestionsView = useMemo(() => {
+    if (!promoSuggestions || !promoSuggestions.length) return [];
+
+    // Horizonte: considerar sugestão base como ~1 ciclo (21 dias)
+    const BASE_CYCLE_DAYS = 365 / 17;
+    const horizonDaysNum =
+      Number(promoHorizonDays) > 0
+        ? Number(promoHorizonDays)
+        : BASE_CYCLE_DAYS;
+    const horizonFactor = horizonDaysNum / BASE_CYCLE_DAYS;
+
+    let list = promoSuggestions;
+
+    // filtro por curva
+    if (promoCurveFilter !== "Todas") {
+      list = list.filter((r) => (r.Classe || "") === promoCurveFilter);
+    }
+
+    // filtro por SKU
+    if (promoSkuFilter !== "Todos") {
+      list = list.filter((r) => r.SKU === promoSkuFilter);
+    }
+
+    // aplica ajuste de horizonte (multiplica qtd e valor)
+    return list.map((r) => {
+      const fator = horizonFactor || 1;
+      return {
+        ...r,
+        QtdSugerida: Math.round((r.QtdSugerida || 0) * fator),
+        ValorTotal: (r.ValorTotal || 0) * fator,
+      };
+    });
+  }, [
+    promoSuggestions,
+    promoCurveFilter,
+    promoSkuFilter,
+    promoHorizonDays,
+  ]);
+
+  const promoTotalsView = useMemo(() => {
+    let totalQtd = 0;
+    let totalValor = 0;
+    for (const r of promoSuggestionsView) {
+      totalQtd += r.QtdSugerida || 0;
+      totalValor += r.ValorTotal || 0;
+    }
+    return {
+      totalQtd,
+      totalValor,
+      totalSkus: promoSuggestionsView.length,
+    };
+  }, [promoSuggestionsView]);
+
+  const promoChartData = useMemo(() => {
+    return promoSuggestionsView.slice(0, 20).map((r) => ({
+      SKU: r.SKU,
+      Label: `${r.SKU} — ${r.Descricao}`,
+      QtdSugerida: r.QtdSugerida,
+      ValorTotal: r.ValorTotal,
+    }));
+  }, [promoSuggestionsView]);
+
+  const promoResumoKpis = useMemo(() => {
+    if (!promoSuggestionsView.length) {
+      return {
+        valorTop1: 0,
+        totalTop5Qtd: 0,
+        totalTop5Valor: 0,
+      };
+    }
+
+    const sorted = [...promoSuggestionsView].sort(
+      (a, b) => (b.ValorTotal || 0) - (a.ValorTotal || 0)
+    );
+
+    const top1 = sorted[0];
+    const top5 = sorted.slice(0, 5);
+
+    const totalTop5Qtd = top5.reduce(
+      (sum, r) => sum + (r.QtdSugerida || 0),
+      0
+    );
+    const totalTop5Valor = top5.reduce(
+      (sum, r) => sum + (r.ValorTotal || 0),
+      0
+    );
+
+    return {
+      valorTop1: top1?.ValorTotal || 0,
+      totalTop5Qtd,
+      totalTop5Valor,
+    };
+  }, [promoSuggestionsView]);
+
   const { transfers, buys, totalsPlan } = useMemo(() => {
     const transfers = [];
     const buys = [];
 
-    let totalTransfer = 0;      // qtd transferida (itens)
-    let totalBuy = 0;           // qtd comprada (itens)
-    let totalBuyValor = 0;      // investimento com transferências (R$)
+    let totalTransfer = 0; // qtd transferida (itens)
+    let totalBuy = 0; // qtd comprada (itens)
+    let totalBuyValor = 0; // investimento com transferências (R$)
 
-    let baseBuyQty = 0;         // qtd que seria comprada sem transferência
-    let baseBuyValor = 0;       // investimento sem transferências (R$)
+    let baseBuyQty = 0; // qtd que seria comprada sem transferência
+    let baseBuyValor = 0; // investimento sem transferências (R$)
 
     let moves = 0;
+
+    // cada EstoqueMinimoSugerido foi calculado para ~1 ciclo
+    const BASE_CYCLE_DAYS = 365 / 17;
+    const horizonDaysNum =
+      Number(planDays) > 0 ? Number(planDays) : BASE_CYCLE_DAYS;
+    const horizonFactor = horizonDaysNum / BASE_CYCLE_DAYS;
 
     for (const rec of sugestaoMinimo) {
       const sku = rec.SKU;
       const desc = rec.Descricao;
-      const globalMin = rec.EstoqueMinimoSugerido;
+
+      const cicloDes = skuDesativacao.get(sku) ?? null;
+
+      // OPÇÃO 4 – filtro de exibição por desativação
+      if (planDesativMode === "somente_ativos") {
+        // só entra SKU sem desativação ou com desativação após o ciclo atual
+        if (cicloDes != null && cicloDes <= CURRENT_CYCLE) continue;
+      } else if (planDesativMode === "ate_ciclo_atual") {
+        // só SKUs que desativam até o ciclo atual
+        if (cicloDes == null || cicloDes > CURRENT_CYCLE) continue;
+      } else if (planDesativMode === "ate_prox_ciclo") {
+        // só SKUs que desativam até o próximo ciclo
+        if (cicloDes == null || cicloDes > CURRENT_CYCLE + 1) continue;
+      }
+
+      const baseGlobalMin = rec.EstoqueMinimoSugerido || 0;
+      const globalMin = Math.max(
+        0,
+        Math.round(baseGlobalMin * horizonFactor)
+      );
 
       const classe = skuClasse.get(sku) || "";
       if (planCurveFilter !== "Todas" && classe !== planCurveFilter) {
@@ -1172,6 +1563,15 @@ export default function DashboardEstoquePage() {
           const valorUnit = priceMap?.get(city) || 0;
           const valorTotal = valorUnit * q;
 
+          const isDesativadoParaCompra =
+            cicloDes != null && cicloDes <= CURRENT_CYCLE;
+
+          // OPÇÃO 2 – se SKU desativado entra ou não no plano de compras
+          if (isDesativadoParaCompra && buyDesativMode === "excluir") {
+            // não cria linha de compra, só deixa registrado no cenário base
+            continue;
+          }
+
           buys.push({
             SKU: sku,
             Descricao: desc,
@@ -1211,8 +1611,12 @@ export default function DashboardEstoquePage() {
     skuClasse,
     skuCategoria,
     skuPrecoCidade,
+    skuDesativacao,
     planCurveFilter,
     planCategoryFilter,
+    planDays,
+    planDesativMode,
+    buyDesativMode,
   ]);
 
   const planCityOptions = useMemo(() => {
@@ -1407,11 +1811,38 @@ export default function DashboardEstoquePage() {
           MarcaFiltro: brandFilter,
           ClasseFiltroPlano: planCurveFilter,
           CategoriaFiltroPlano: planCategoryFilter,
+          HorizonteDias: Number(planDays) || 0,
+          DesativacaoFiltroPlano: planDesativMode,
+          ComprasDesativados: buyDesativMode,
         },
       ]),
       "Resumo"
     );
     XLSX.writeFile(wb, "plano_transferencia_compra.xlsx");
+  }
+
+  function exportPromoXlsx() {
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(
+      wb,
+      XLSX.utils.json_to_sheet(promoSuggestionsView),
+      "Promo_Sugestoes"
+    );
+    XLSX.utils.book_append_sheet(
+      wb,
+      XLSX.utils.json_to_sheet([
+        {
+          HorizonteDias: Number(promoHorizonDays) || 0,
+          CurvaFiltro: promoCurveFilter,
+          SkuFiltro: promoSkuFilter,
+          TotalSkus: promoTotalsView.totalSkus,
+          TotalQtd: promoTotalsView.totalQtd,
+          TotalValor: promoTotalsView.totalValor,
+        },
+      ]),
+      "Resumo"
+    );
+    XLSX.writeFile(wb, "sugestoes_compra_promocao.xlsx");
   }
 
   function handlePrint() {
@@ -1466,14 +1897,14 @@ export default function DashboardEstoquePage() {
                 className="hidden"
               />
             </label>
-			
-		<a
-			href="/dashboard"
-			className="rounded-lg px-3 py-2 text-sm font-medium shadow"
-			style={{ background: C_PURPLE }}
-			>
-			Conferência
-		</a>
+
+            <a
+              href="/dashboard"
+              className="rounded-lg px-3 py-2 text-sm font-medium shadow"
+              style={{ background: C_PURPLE }}
+            >
+              Conferência
+            </a>
             <a
               href="/"
               className="rounded-lg px-3 py-2 text-sm font-medium shadow inline-flex items-center gap-2"
@@ -1570,13 +2001,13 @@ export default function DashboardEstoquePage() {
                 Buscar por SKU/Descrição
               </p>
 
-             <input
-  className="w-full rounded-lg border border-white/20 px-3 py-2 text-sm"
-  style={{ backgroundColor: "#0f172a", color: "#ffffff" }}
-  placeholder="buscar…"
-  value={query}
-  onChange={(e) => setQuery(e.target.value)}
-/>
+              <input
+                className="w-full rounded-lg border border-white/20 px-3 py-2 text-sm"
+                style={{ backgroundColor: "#0f172a", color: "#ffffff" }}
+                placeholder="buscar…"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+              />
             </div>
           </div>
 
@@ -1593,6 +2024,8 @@ export default function DashboardEstoquePage() {
                 setPlanCityFilter("Todas");
                 setPlanCurveFilter("Todas");
                 setPlanCategoryFilter("Todas");
+                setPlanDesativMode("todos");
+                setBuyDesativMode("excluir");
               }}
               className="rounded-lg px-3 py-2 text-sm font-medium"
               style={{ background: "rgba(148,163,184,.5)" }}
@@ -2012,31 +2445,31 @@ export default function DashboardEstoquePage() {
                 <CartesianGrid strokeDasharray="3 3" />
                 <XAxis dataKey="SKU" hide />
                 <YAxis />
-  <Tooltip
-  content={({ active, payload }) => {
-    if (!active || !payload || !payload.length) return null;
-    const item = payload[0].payload; // { SKU, Label, Min }
+                <Tooltip
+                  content={({ active, payload }) => {
+                    if (!active || !payload || !payload.length) return null;
+                    const item = payload[0].payload; // { SKU, Label, Min }
 
-    return (
-      <div
-        className="rounded-lg px-3 py-2 text-xs shadow"
-        style={{
-          background: "#ffffff",
-          color: C_GREEN,
-          border: `1px solid ${C_GREEN}`,
-        }}
-      >
-        {/* SKU + Descrição */}
-        <div className="font-semibold mb-1">{item.Label}</div>
+                    return (
+                      <div
+                        className="rounded-lg px-3 py-2 text-xs shadow"
+                        style={{
+                          background: "#ffffff",
+                          color: C_GREEN,
+                          border: `1px solid ${C_GREEN}`,
+                        }}
+                      >
+                        {/* SKU + Descrição */}
+                        <div className="font-semibold mb-1">{item.Label}</div>
 
-        <div>
-          Estoque mínimo sugerido:{" "}
-          <span className="font-bold">{item.Min}</span>
-        </div>
-      </div>
-    );
-  }}
-/>
+                        <div>
+                          Estoque mínimo sugerido:{" "}
+                          <span className="font-bold">{item.Min}</span>
+                        </div>
+                      </div>
+                    );
+                  }}
+                />
                 <Legend />
                 <Bar
                   dataKey="Min"
@@ -2100,66 +2533,108 @@ export default function DashboardEstoquePage() {
 
       {/* PLANO TRANSFERÊNCIAS & COMPRAS */}
       <div className="max-w-7xl mx-auto px-6 mt-10 mb-10 space-y-4">
-        <Card
-          title="Plano de Transferências & Compras"
-          borderColor="rgba(239,68,68,.35)"
-          right={
-            <div className="flex items-center gap-2 no-print">
+        <Card borderColor="rgba(239,68,68,.35)">
+          {/* Título centralizado + filtros */}
+          <div className="no-print mb-4">
+            <h2 className="text-lg font-semibold text-center mb-3">
+              Plano de Transferências &amp; Compras
+            </h2>
+
+            <div className="flex flex-wrap items-center justify-center gap-2">
               <SelectDark
                 label="Cidade (filtro plano)"
                 value={planCityFilter}
-                onChange={(e) =>
-                  setPlanCityFilter(e.target.value)
-                }
+                onChange={(e) => setPlanCityFilter(e.target.value)}
                 options={planCityOptions}
               />
+
               <SelectDark
-                label="Curva (classe SKU)"
+                label="Curva SKU"
                 value={planCurveFilter}
-                onChange={(e) =>
-                  setPlanCurveFilter(e.target.value)
-                }
+                onChange={(e) => setPlanCurveFilter(e.target.value)}
                 options={planCurveOptions}
               />
+
               <SelectDark
                 label="Categoria"
                 value={planCategoryFilter}
-                onChange={(e) =>
-                  setPlanCategoryFilter(e.target.value)
-                }
+                onChange={(e) => setPlanCategoryFilter(e.target.value)}
                 options={planCategoryOptions}
               />
+
+              <SelectDark
+                label="Horizonte (dias)"
+                value={String(planDays)}
+                onChange={(e) => setPlanDays(e.target.value)}
+                options={[
+                  { value: "7", label: "7 dias" },
+                  { value: "14", label: "14 dias" },
+                  { value: "17", label: "17 dias" },
+                  { value: "21", label: "21 dias (padrão)" },
+                  { value: "30", label: "30 dias" },
+                  { value: "45", label: "45 dias" },
+                  { value: "60", label: "60 dias" },
+                  { value: "90", label: "90 dias" },
+                ]}
+                className="w-40"
+              />
+
+              <SelectDark
+                label="Desativação (filtro)"
+                value={planDesativMode}
+                onChange={(e) => setPlanDesativMode(e.target.value)}
+                options={[
+                  { value: "todos", label: "Todos os SKUs" },
+                  { value: "somente_ativos", label: "Somente ativos" },
+                  {
+                    value: "ate_ciclo_atual",
+                    label: `Só que desativam até C${CURRENT_CYCLE}`,
+                  },
+                  {
+                    value: "ate_prox_ciclo",
+                    label: `Até C${CURRENT_CYCLE + 1}`,
+                  },
+                ]}
+                className="w-44"
+              />
+
+              <SelectDark
+                label="Compras p/ desativados"
+                value={buyDesativMode}
+                onChange={(e) => setBuyDesativMode(e.target.value)}
+                options={[
+                  { value: "excluir", label: "Não comprar" },
+                  { value: "incluir", label: "Incluir nas compras" },
+                ]}
+                className="w-40"
+              />
+
               <button
                 onClick={() => setPlanTab("transfer")}
                 className={`rounded-lg px-3 py-2 text-xs sm:text-sm font-medium shadow ${
-                  planTab === "transfer"
-                    ? "bg-emerald-500"
-                    : "bg-white/10"
+                  planTab === "transfer" ? "bg-emerald-500" : "bg-white/10"
                 }`}
               >
                 Transferências
               </button>
+
               <button
                 onClick={() => setPlanTab("compras")}
                 className={`rounded-lg px-3 py-2 text-xs sm:text-sm font-medium shadow ${
-                  planTab === "compras"
-                    ? "bg-emerald-500"
-                    : "bg-white/10"
+                  planTab === "compras" ? "bg-emerald-500" : "bg-white/10"
                 }`}
               >
                 Compras
               </button>
+
               <button
-                onClick={() =>
-                  setShowPlanDetail((v) => !v)
-                }
+                onClick={() => setShowPlanDetail((v) => !v)}
                 className="rounded-lg px-3 py-2 text-xs sm:text-sm font-medium shadow"
                 style={{ background: C_PURPLE }}
               >
-                {showPlanDetail
-                  ? "Ocultar detalhe"
-                  : "Ver detalhe"}
+                {showPlanDetail ? "Ocultar detalhe" : "Ver detalhe"}
               </button>
+
               <button
                 onClick={exportPlanXlsx}
                 className="rounded-lg px-3 py-2 text-xs sm:text-sm font-medium shadow"
@@ -2168,22 +2643,23 @@ export default function DashboardEstoquePage() {
                 Exportar Plano XLSX
               </button>
             </div>
-          }
-        >
+          </div>
+
+          {/* KPIs do plano (já respeitando filtro de cidade) */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
             <Kpi
               title="Total a transferir (itens)"
-              value={totalsPlan.totalTransfer}
+              value={transfersView.reduce((s, t) => s + (t.Qtd || 0), 0)}
               color={C_GREEN}
             />
             <Kpi
               title="Movimentos de transferência"
-              value={totalsPlan.moves}
+              value={transfersView.length}
               color={C_BLUE}
             />
             <Kpi
               title="Total a comprar (itens)"
-              value={totalsPlan.totalBuy}
+              value={buysView.reduce((s, b) => s + (b.Qtd || 0), 0)}
               color={C_ROSE}
             />
           </div>
@@ -2191,10 +2667,12 @@ export default function DashboardEstoquePage() {
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
             <Kpi
               title="Investimento com transferências (R$)"
-              value={totalsPlan.totalBuyValor.toLocaleString("pt-BR", {
-                style: "currency",
-                currency: "BRL",
-              })}
+              value={buysView
+                .reduce((s, b) => s + (b.ValorTotal || 0), 0)
+                .toLocaleString("pt-BR", {
+                  style: "currency",
+                  currency: "BRL",
+                })}
               color={C_ROSE}
               raw
             />
@@ -2209,7 +2687,10 @@ export default function DashboardEstoquePage() {
             />
             <Kpi
               title="Economia obtida (R$)"
-              value={totalsPlan.economiaValor.toLocaleString("pt-BR", {
+              value={(
+                totalsPlan.baseBuyValor -
+                buysView.reduce((s, b) => s + (b.ValorTotal || 0), 0)
+              ).toLocaleString("pt-BR", {
                 style: "currency",
                 currency: "BRL",
               })}
@@ -2227,37 +2708,26 @@ export default function DashboardEstoquePage() {
                 >
                   <div style={{ width: "100%", height: 300 }}>
                     <ResponsiveContainer width="100%" height={300}>
-<BarChart
-  data={buysByCidade}
-  margin={{
-    left: 12,
-    right: 12,
-    top: 10,
-    bottom: 10,
-  }}
->
-  <CartesianGrid strokeDasharray="3 3" />
-  <XAxis dataKey="Cidade" />
-  <YAxis />
-  <Tooltip
-    formatter={(value) => [
-      value.toLocaleString("pt-BR", {
-        style: "currency",
-        currency: "BRL",
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2,
-      }),
-      "Investimento",
-    ]}
-  />
-  <Legend />
-  <Bar
-    dataKey="Valor"
-    name="Investimento (R$)"
-    fill={C_ROSE}
-  />
-</BarChart>
-
+                      <BarChart
+                        data={transfersByDestino}
+                        margin={{
+                          left: 12,
+                          right: 12,
+                          top: 10,
+                          bottom: 10,
+                        }}
+                      >
+                        <CartesianGrid strokeDasharray="3 3" />
+                        <XAxis dataKey="Cidade" />
+                        <YAxis />
+                        <Tooltip />
+                        <Legend />
+                        <Bar
+                          dataKey="Qtd"
+                          name="Qtd a transferir"
+                          fill={C_GREEN}
+                        />
+                      </BarChart>
                     </ResponsiveContainer>
                   </div>
                 </Card>
@@ -2281,31 +2751,33 @@ export default function DashboardEstoquePage() {
                         <XAxis dataKey="SKU" hide />
                         <YAxis />
                         <Tooltip
-  content={({ active, payload }) => {
-    if (!active || !payload || !payload.length) return null;
-    const item = payload[0].payload; // { SKU, Qtd }
+                          content={({ active, payload }) => {
+                            if (!active || !payload || !payload.length)
+                              return null;
+                            const item = payload[0].payload;
 
-    return (
-      <div
-        className="rounded-lg px-3 py-2 text-xs shadow"
-        style={{
-          background: "#ffffff",
-          color: C_BLUE,
-          border: `1px solid ${C_BLUE}`,
-        }}
-      >
-        {/* SKU + Descrição */}
-        <div className="font-semibold mb-1">{item.SKU}</div>
-
-        <div>
-          Qtd a transferir:{" "}
-          <span className="font-bold">{item.Qtd}</span>
-        </div>
-      </div>
-    );
-  }}
-/>
-
+                            return (
+                              <div
+                                className="rounded-lg px-3 py-2 text-xs shadow"
+                                style={{
+                                  background: "#ffffff",
+                                  color: C_BLUE,
+                                  border: `1px solid ${C_BLUE}`,
+                                }}
+                              >
+                                <div className="font-semibold mb-1">
+                                  {item.SKU}
+                                </div>
+                                <div>
+                                  Qtd a transferir:{" "}
+                                  <span className="font-bold">
+                                    {item.Qtd}
+                                  </span>
+                                </div>
+                              </div>
+                            );
+                          }}
+                        />
                         <Legend />
                         <Bar
                           dataKey="Qtd"
@@ -2331,6 +2803,7 @@ export default function DashboardEstoquePage() {
                           "Descrição",
                           "Classe",
                           "Categoria",
+                          "Desativação",
                           "Origem",
                           "Destino",
                           "Qtd a transferir",
@@ -2346,41 +2819,67 @@ export default function DashboardEstoquePage() {
                     </thead>
                     <tbody>
                       {transfersView.length ? (
-                        transfersView.map((r, idx) => (
-                          <tr
-                            key={idx}
-                            className="border-t"
-                            style={{ borderColor: C_CARD_BORDER }}
-                          >
-                            <td className="px-3 py-2 whitespace-nowrap">
-                              {r.SKU}
-                            </td>
-                            <td className="px-3 py-2">
-                              {r.Descricao}
-                            </td>
-                            <td className="px-3 py-2">
-                              {skuClasse.get(r.SKU) || ""}
-                            </td>
-                            <td className="px-3 py-2">
-                              {skuCategoria.get(r.SKU) || ""}
-                            </td>
-                            <td className="px-3 py-2">
-                              {r.Origem}
-                            </td>
-                            <td className="px-3 py-2">
-                              {r.Destino}
-                            </td>
-                            <td className="px-3 py-2 text-right">
-                              {r.Qtd}
-                            </td>
-                          </tr>
-                        ))
+                        transfersView.map((r, idx) => {
+                          const cicloDes = skuDesativacao.get(r.SKU);
+                          return (
+                            <tr
+                              key={idx}
+                              className="border-t"
+                              style={{ borderColor: C_CARD_BORDER }}
+                            >
+                              <td className="px-3 py-2 whitespace-nowrap">
+                                {r.SKU}
+                              </td>
+                              <td className="px-3 py-2">
+                                {r.Descricao}
+                              </td>
+                              <td className="px-3 py-2">
+                                {skuClasse.get(r.SKU) || ""}
+                              </td>
+                              <td className="px-3 py-2">
+                                {skuCategoria.get(r.SKU) || ""}
+                              </td>
+                              <td className="px-3 py-2">
+                                {cicloDes ? (
+                                  <span
+                                    className={
+                                      cicloDes <= CURRENT_CYCLE
+                                        ? "text-red-400 font-semibold"
+                                        : cicloDes === CURRENT_CYCLE + 1
+                                        ? "text-amber-300 font-semibold"
+                                        : "text-white"
+                                    }
+                                  >
+                                    {`C${cicloDes}${
+                                      cicloDes <= CURRENT_CYCLE
+                                        ? " (desativado)"
+                                        : cicloDes === CURRENT_CYCLE + 1
+                                        ? " (próx. ciclo)"
+                                        : ""
+                                    }`}
+                                  </span>
+                                ) : (
+                                  ""
+                                )}
+                              </td>
+                              <td className="px-3 py-2">
+                                {r.Origem}
+                              </td>
+                              <td className="px-3 py-2">
+                                {r.Destino}
+                              </td>
+                              <td className="px-3 py-2 text-right">
+                                {r.Qtd}
+                              </td>
+                            </tr>
+                          );
+                        })
                       ) : (
                         <tr
                           className="border-t"
                           style={{ borderColor: C_CARD_BORDER }}
                         >
-                          <td className="px-3 py-4" colSpan={7}>
+                          <td className="px-3 py-4" colSpan={8}>
                             Nenhuma transferência necessária.
                           </td>
                         </tr>
@@ -2411,18 +2910,17 @@ export default function DashboardEstoquePage() {
                         <CartesianGrid strokeDasharray="3 3" />
                         <XAxis dataKey="Cidade" />
                         <YAxis />
-                       <Tooltip
-  formatter={(value) => [
-    value.toLocaleString("pt-BR", {
-      style: "currency",
-      currency: "BRL",
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    }),
-    "Investimento",
-  ]}
-/>
-
+                        <Tooltip
+                          formatter={(value) => [
+                            value.toLocaleString("pt-BR", {
+                              style: "currency",
+                              currency: "BRL",
+                              minimumFractionDigits: 2,
+                              maximumFractionDigits: 2,
+                            }),
+                            "Investimento",
+                          ]}
+                        />
                         <Legend />
                         <Bar
                           dataKey="Valor"
@@ -2453,17 +2951,16 @@ export default function DashboardEstoquePage() {
                         <XAxis dataKey="Marca" />
                         <YAxis />
                         <Tooltip
-  formatter={(value) => [
-    value.toLocaleString("pt-BR", {
-      style: "currency",
-      currency: "BRL",
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    }),
-    "Investimento",
-  ]}
-/>
-
+                          formatter={(value) => [
+                            value.toLocaleString("pt-BR", {
+                              style: "currency",
+                              currency: "BRL",
+                              minimumFractionDigits: 2,
+                              maximumFractionDigits: 2,
+                            }),
+                            "Investimento",
+                          ]}
+                        />
                         <Legend />
                         <Bar
                           dataKey="Valor"
@@ -2476,7 +2973,6 @@ export default function DashboardEstoquePage() {
                 </Card>
               </div>
 
-              {/* Top 10 SKUs que mais consomem investimento */}
               <div className="mt-4">
                 <Card
                   title="Top 10 SKUs para Comprar (R$)"
@@ -2520,13 +3016,10 @@ export default function DashboardEstoquePage() {
                                 {r.Qtd}
                               </td>
                               <td className="px-3 py-2 text-right">
-                                {(r.ValorTotal ?? 0).toLocaleString(
-                                  "pt-BR",
-                                  {
-                                    style: "currency",
-                                    currency: "BRL",
-                                  }
-                                )}
+                                {(r.ValorTotal ?? 0).toLocaleString("pt-BR", {
+                                  style: "currency",
+                                  currency: "BRL",
+                                })}
                               </td>
                             </tr>
                           ))
@@ -2559,6 +3052,7 @@ export default function DashboardEstoquePage() {
                           "Descrição",
                           "Classe",
                           "Categoria",
+                          "Desativação",
                           "Cidade",
                           "Qtd a comprar",
                           "Valor unitário",
@@ -2575,50 +3069,76 @@ export default function DashboardEstoquePage() {
                     </thead>
                     <tbody>
                       {buysView.length ? (
-                        buysView.map((r, idx) => (
-                          <tr
-                            key={idx}
-                            className="border-t"
-                            style={{ borderColor: C_CARD_BORDER }}
-                          >
-                            <td className="px-3 py-2 whitespace-nowrap">
-                              {r.SKU}
-                            </td>
-                            <td className="px-3 py-2">
-                              {r.Descricao}
-                            </td>
-                            <td className="px-3 py-2">
-                              {skuClasse.get(r.SKU) || ""}
-                            </td>
-                            <td className="px-3 py-2">
-                              {skuCategoria.get(r.SKU) || ""}
-                            </td>
-                            <td className="px-3 py-2">
-                              {r.Cidade}
-                            </td>
-                            <td className="px-3 py-2 text-right">
-                              {r.Qtd}
-                            </td>
-                            <td className="px-3 py-2 text-right">
-                              {(r.ValorUnit ?? 0).toLocaleString("pt-BR", {
-                                style: "currency",
-                                currency: "BRL",
-                              })}
-                            </td>
-                            <td className="px-3 py-2 text-right">
-                              {(r.ValorTotal ?? 0).toLocaleString("pt-BR", {
-                                style: "currency",
-                                currency: "BRL",
-                              })}
-                            </td>
-                          </tr>
-                        ))
+                        buysView.map((r, idx) => {
+                          const cicloDes = skuDesativacao.get(r.SKU);
+                          return (
+                            <tr
+                              key={idx}
+                              className="border-t"
+                              style={{ borderColor: C_CARD_BORDER }}
+                            >
+                              <td className="px-3 py-2 whitespace-nowrap">
+                                {r.SKU}
+                              </td>
+                              <td className="px-3 py-2">
+                                {r.Descricao}
+                              </td>
+                              <td className="px-3 py-2">
+                                {skuClasse.get(r.SKU) || ""}
+                              </td>
+                              <td className="px-3 py-2">
+                                {skuCategoria.get(r.SKU) || ""}
+                              </td>
+                              <td className="px-3 py-2">
+                                {cicloDes ? (
+                                  <span
+                                    className={
+                                      cicloDes <= CURRENT_CYCLE
+                                        ? "text-red-400 font-semibold"
+                                        : cicloDes === CURRENT_CYCLE + 1
+                                        ? "text-amber-300 font-semibold"
+                                        : "text-white"
+                                    }
+                                  >
+                                    {`C${cicloDes}${
+                                      cicloDes <= CURRENT_CYCLE
+                                        ? " (desativado)"
+                                        : cicloDes === CURRENT_CYCLE + 1
+                                        ? " (próx. ciclo)"
+                                        : ""
+                                    }`}
+                                  </span>
+                                ) : (
+                                  ""
+                                )}
+                              </td>
+                              <td className="px-3 py-2">
+                                {r.Cidade}
+                              </td>
+                              <td className="px-3 py-2 text-right">
+                                {r.Qtd}
+                              </td>
+                              <td className="px-3 py-2 text-right">
+                                {(r.ValorUnit ?? 0).toLocaleString("pt-BR", {
+                                  style: "currency",
+                                  currency: "BRL",
+                                })}
+                              </td>
+                              <td className="px-3 py-2 text-right">
+                                {(r.ValorTotal ?? 0).toLocaleString("pt-BR", {
+                                  style: "currency",
+                                  currency: "BRL",
+                                })}
+                              </td>
+                            </tr>
+                          );
+                        })
                       ) : (
                         <tr
                           className="border-t"
                           style={{ borderColor: C_CARD_BORDER }}
                         >
-                          <td className="px-3 py-4" colSpan={6}>
+                          <td className="px-3 py-4" colSpan={9}>
                             Nenhuma compra necessária.
                           </td>
                         </tr>
@@ -2631,6 +3151,268 @@ export default function DashboardEstoquePage() {
           )}
         </Card>
       </div>
+
+      {/* SUGESTÃO DE COMPRA - SKUs EM PROMOÇÃO (PRÓXIMO CICLO) */}
+      {promoSuggestionsView.length > 0 && (
+        <div className="max-w-7xl mx-auto px-6 mt-6 mb-10 space-y-4">
+          <Card borderColor="rgba(34,197,94,.35)">
+            {/* Título + filtros no topo, igual plano */}
+            <div className="no-print mb-4 flex flex-col items-center justify-center text-center gap-2">
+              <div className="flex flex-col items-center justify-center text-center">
+                <h2 className="text-xl font-semibold">
+                  Sugestão de Compra – SKUs em Promoção (Próximo Ciclo C16)
+                </h2>
+
+                <p className="text-xs text-white/60 mt-1">
+                  Considerando promoções do próximo ciclo e consumo base
+                  estimado a partir do ciclo atual C15.
+                </p>
+              </div>
+              <div className="flex flex-wrap items-end gap-2">
+                <SelectDark
+                  label="Horizonte (dias)"
+                  value={promoHorizonDays}
+                  onChange={(e) => setPromoHorizonDays(e.target.value)}
+                  options={[
+                    { value: "7", label: "7 dias" },
+                    { value: "14", label: "14 dias" },
+                    { value: "17", label: "17 dias" },
+                    { value: "21", label: "21 dias (padrão)" },
+                    { value: "30", label: "30 dias" },
+                    { value: "45", label: "45 dias" },
+                    { value: "60", label: "60 dias" },
+                    { value: "90", label: "90 dias" },
+                  ]}
+                  className="w-40"
+                />
+
+                <SelectDark
+                  label="Curva SKU"
+                  value={promoCurveFilter}
+                  onChange={(e) => setPromoCurveFilter(e.target.value)}
+                  options={promoCurveOptions}
+                  className="w-32"
+                />
+
+                <SelectDark
+                  label="SKU"
+                  value={promoSkuFilter}
+                  onChange={(e) => setPromoSkuFilter(e.target.value)}
+                  options={promoSkuOptions}
+                  className="w-56"
+                />
+
+                <button
+                  onClick={() => setShowPromoDetail((v) => !v)}
+                  className="rounded-lg px-3 py-2 text-xs sm:text-sm font-medium shadow"
+                  style={{ background: C_PURPLE }}
+                >
+                  {showPromoDetail ? "Ocultar detalhe" : "Ver detalhe"}
+                </button>
+
+                <button
+                  onClick={exportPromoXlsx}
+                  className="rounded-lg px-3 py-2 text-xs sm:text-sm font-medium shadow"
+                  style={{ background: C_BLUE }}
+                >
+                  Exportar Promo XLSX
+                </button>
+              </div>
+            </div>
+
+            {/* KPIs do card de promoção */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+              <Kpi
+                title="SKUs em promoção (com compra sugerida)"
+                value={promoTotalsView.totalSkus}
+                color={C_BLUE}
+              />
+              <Kpi
+                title="Total de itens sugeridos"
+                value={promoTotalsView.totalQtd}
+                color={C_GREEN}
+              />
+              <Kpi
+                title="Investimento sugerido (R$)"
+                value={promoTotalsView.totalValor.toLocaleString("pt-BR", {
+                  style: "currency",
+                  currency: "BRL",
+                })}
+                color={C_AMBER}
+                raw
+              />
+            </div>
+
+            {/* KPIs adicionais (Top 1 / Top 5) */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+              <Kpi
+                title="Top 1 SKU (R$)"
+                value={promoResumoKpis.valorTop1.toLocaleString("pt-BR", {
+                  style: "currency",
+                  currency: "BRL",
+                })}
+                color={C_ROSE}
+                raw
+              />
+              <Kpi
+                title="Top 5 SKUs - Itens"
+                value={promoResumoKpis.totalTop5Qtd}
+                color={C_GREEN}
+              />
+              <Kpi
+                title="Top 5 SKUs - Investimento (R$)"
+                value={promoResumoKpis.totalTop5Valor.toLocaleString(
+                  "pt-BR",
+                  {
+                    style: "currency",
+                    currency: "BRL",
+                  }
+                )}
+                color={C_BLUE}
+                raw
+              />
+            </div>
+
+            {/* Gráfico de barras dos SKUs em promoção */}
+            <div style={{ width: "100%", height: 360, marginTop: 16 }}>
+              <ResponsiveContainer width="100%" height={360}>
+                <BarChart
+                  data={promoChartData}
+                  margin={{
+                    left: 12,
+                    right: 12,
+                    top: 10,
+                    bottom: 10,
+                  }}
+                >
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="SKU" hide />
+                  <YAxis />
+                  <Tooltip
+                    content={({ active, payload }) => {
+                      if (!active || !payload || !payload.length)
+                        return null;
+                      const item = payload[0].payload;
+
+                      return (
+                        <div
+                          className="rounded-lg px-3 py-2 text-xs shadow"
+                          style={{
+                            background: "#ffffff",
+                            color: C_BLUE,
+                            border: `1px solid ${C_BLUE}`,
+                          }}
+                        >
+                          <div className="font-semibold mb-1">
+                            {item.Label}
+                          </div>
+                          <div>
+                            Qtd sugerida:{" "}
+                            <span className="font-bold">
+                              {item.QtdSugerida}
+                            </span>
+                          </div>
+                          <div>
+                            Investimento sugerido:{" "}
+                            <span className="font-bold">
+                              {item.ValorTotal.toLocaleString("pt-BR", {
+                                style: "currency",
+                                currency: "BRL",
+                              })}
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    }}
+                  />
+                  <Legend />
+                  <Bar
+                    dataKey="ValorTotal"
+                    name="Investimento sugerido (R$)"
+                    fill={C_BLUE}
+                  />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+
+            {/* Detalhe em tabela */}
+            {showPromoDetail && (
+              <div
+                className="mt-6 overflow-auto rounded-lg"
+                style={{ border: `1px solid ${C_CARD_BORDER}` }}
+              >
+                <table className="w-full text-sm">
+                  <thead className="bg-white/5">
+                    <tr>
+                      {[
+                        "SKU",
+                        "Descrição",
+                        "Classe",
+                        "Desconto (%)",
+                        "Mínimo base",
+                        "Alvo promo",
+                        "Estoque disponível",
+                        "Qtd sugerida compra",
+                        "Preço unit. promo (R$)",
+                        "Total sugerido (R$)",
+                      ].map((h) => (
+                        <th
+                          key={h}
+                          className="text-left px-3 py-2 font-medium"
+                        >
+                          {h}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {promoSuggestionsView.map((r) => (
+                      <tr
+                        key={r.SKU}
+                        className="border-t"
+                        style={{ borderColor: C_CARD_BORDER }}
+                      >
+                        <td className="px-3 py-2 whitespace-nowrap">
+                          {r.SKU}
+                        </td>
+                        <td className="px-3 py-2">{r.Descricao}</td>
+                        <td className="px-3 py-2">{r.Classe}</td>
+                        <td className="px-3 py-2 text-right">
+                          {r.Desconto}
+                        </td>
+                        <td className="px-3 py-2 text-right">
+                          {r.EstoqueMinBase}
+                        </td>
+                        <td className="px-3 py-2 text-right">
+                          {r.EstoqueAlvoPromo}
+                        </td>
+                        <td className="px-3 py-2 text-right">
+                          {r.EstoqueDisponivel}
+                        </td>
+                        <td className="px-3 py-2 text-right">
+                          {r.QtdSugerida}
+                        </td>
+                        <td className="px-3 py-2 text-right">
+                          {r.PrecoUnitPromo.toLocaleString("pt-BR", {
+                            style: "currency",
+                            currency: "BRL",
+                          })}
+                        </td>
+                        <td className="px-3 py-2 text-right">
+                          {r.ValorTotal.toLocaleString("pt-BR", {
+                            style: "currency",
+                            currency: "BRL",
+                          })}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </Card>
+        </div>
+      )}
 
       <style jsx global>{`
         @media print {
