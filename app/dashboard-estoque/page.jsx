@@ -370,12 +370,144 @@ export default function DashboardEstoquePage() {
   const [planDays, setPlanDays] = useState("21"); // horizonte em dias (~1 ciclo)
   const [planDesativMode, setPlanDesativMode] = useState("todos"); // opção 4
   const [buyDesativMode, setBuyDesativMode] = useState("excluir"); // opção 2
+  const [applyTransfers, setApplyTransfers] = useState(true);
 
   // Promoções - filtros / controles do card
   const [promoSkuFilter, setPromoSkuFilter] = useState("Todos");
   const [promoCurveFilter, setPromoCurveFilter] = useState("Todas");
   const [promoHorizonDays, setPromoHorizonDays] = useState("21");
   const [showPromoDetail, setShowPromoDetail] = useState(false);
+
+  // 🔄 Sincroniza filtros entre abas via localStorage (todas as abas)
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const key = "biservice-dashboard-filtros-v1";
+
+    const payload = {
+      brandFilter,
+      cityFilter,
+      query,
+      minMethod,
+      covFactor,
+      minCategoryFilter,
+      minCurveFilter,
+      minCityFilter,
+      minSkuQuery,
+      planTab,
+      planCityFilter,
+      planCurveFilter,
+      planCategoryFilter,
+      planDays,
+      planDesativMode,
+      buyDesativMode,
+      promoSkuFilter,
+      promoCurveFilter,
+      promoHorizonDays,
+    };
+
+    try {
+      window.localStorage.setItem(key, JSON.stringify(payload));
+    } catch (e) {
+      console.warn("Não foi possível salvar filtros no localStorage", e);
+    }
+  }, [
+    brandFilter,
+    cityFilter,
+    query,
+    minMethod,
+    covFactor,
+    minCategoryFilter,
+    minCurveFilter,
+    minCityFilter,
+    minSkuQuery,
+    planTab,
+    planCityFilter,
+    planCurveFilter,
+    planCategoryFilter,
+    planDays,
+    planDesativMode,
+    buyDesativMode,
+    promoSkuFilter,
+    promoCurveFilter,
+    promoHorizonDays,
+  ]);
+
+  // 🔄 Carrega e ouve alterações de filtros vindas de outras abas
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const key = "biservice-dashboard-filtros-v1";
+
+    // Ao montar, tenta carregar filtros existentes
+    try {
+      const raw = window.localStorage.getItem(key);
+      if (raw) {
+        const data = JSON.parse(raw);
+
+        if (data.brandFilter) setBrandFilter(data.brandFilter);
+        if (data.cityFilter) setCityFilter(data.cityFilter);
+        if (typeof data.query === "string") setQuery(data.query);
+
+        if (data.minMethod) setMinMethod(data.minMethod);
+        if (data.covFactor) setCovFactor(data.covFactor);
+        if (data.minCategoryFilter) setMinCategoryFilter(data.minCategoryFilter);
+        if (data.minCurveFilter) setMinCurveFilter(data.minCurveFilter);
+        if (data.minCityFilter) setMinCityFilter(data.minCityFilter);
+        if (typeof data.minSkuQuery === "string") setMinSkuQuery(data.minSkuQuery);
+
+        if (data.planTab) setPlanTab(data.planTab);
+        if (data.planCityFilter) setPlanCityFilter(data.planCityFilter);
+        if (data.planCurveFilter) setPlanCurveFilter(data.planCurveFilter);
+        if (data.planCategoryFilter) setPlanCategoryFilter(data.planCategoryFilter);
+        if (data.planDays) setPlanDays(String(data.planDays));
+        if (data.planDesativMode) setPlanDesativMode(data.planDesativMode);
+        if (data.buyDesativMode) setBuyDesativMode(data.buyDesativMode);
+
+        if (data.promoSkuFilter) setPromoSkuFilter(data.promoSkuFilter);
+        if (data.promoCurveFilter) setPromoCurveFilter(data.promoCurveFilter);
+        if (data.promoHorizonDays)
+          setPromoHorizonDays(String(data.promoHorizonDays));
+      }
+    } catch (e) {
+      console.warn("Não foi possível ler filtros do localStorage", e);
+    }
+
+    const handler = (event) => {
+      if (event.key !== key || !event.newValue) return;
+      try {
+        const data = JSON.parse(event.newValue);
+
+        if (data.brandFilter) setBrandFilter(data.brandFilter);
+        if (data.cityFilter) setCityFilter(data.cityFilter);
+        if (typeof data.query === "string") setQuery(data.query);
+
+        if (data.minMethod) setMinMethod(data.minMethod);
+        if (data.covFactor) setCovFactor(data.covFactor);
+        if (data.minCategoryFilter) setMinCategoryFilter(data.minCategoryFilter);
+        if (data.minCurveFilter) setMinCurveFilter(data.minCurveFilter);
+        if (data.minCityFilter) setMinCityFilter(data.minCityFilter);
+        if (typeof data.minSkuQuery === "string") setMinSkuQuery(data.minSkuQuery);
+
+        if (data.planTab) setPlanTab(data.planTab);
+        if (data.planCityFilter) setPlanCityFilter(data.planCityFilter);
+        if (data.planCurveFilter) setPlanCurveFilter(data.planCurveFilter);
+        if (data.planCategoryFilter) setPlanCategoryFilter(data.planCategoryFilter);
+        if (data.planDays) setPlanDays(String(data.planDays));
+        if (data.planDesativMode) setPlanDesativMode(data.planDesativMode);
+        if (data.buyDesativMode) setBuyDesativMode(data.buyDesativMode);
+
+        if (data.promoSkuFilter) setPromoSkuFilter(data.promoSkuFilter);
+        if (data.promoCurveFilter) setPromoCurveFilter(data.promoCurveFilter);
+        if (data.promoHorizonDays)
+          setPromoHorizonDays(String(data.promoHorizonDays));
+      } catch (e) {
+        console.warn("Erro ao aplicar filtros sincronizados", e);
+      }
+    };
+
+    window.addEventListener("storage", handler);
+    return () => window.removeEventListener("storage", handler);
+  }, []);
+
 
   useEffect(() => {
     (async () => setPdvMap(await fetchPdvCityMapLocal()))();
@@ -1255,6 +1387,45 @@ export default function DashboardEstoquePage() {
     return share;
   }, [salesRows]);
 
+
+  const vendasCicloCidade = useMemo(() => {
+    // Mapa: SKU -> cidade -> { prev, curr }
+    const map = new Map();
+    if (!salesRows || !salesRows.length) return map;
+
+    // descobre ciclo atual e anterior com base nos dados de vendas
+    const ciclos = Array.from(
+      new Set(salesRows.map((r) => r.Ciclo))
+    ).sort((a, b) => cicloKey(a) - cicloKey(b));
+    if (!ciclos.length) return map;
+
+    const cicloAtual = ciclos[ciclos.length - 1];
+    const cicloAnterior =
+      ciclos.length > 1 ? ciclos[ciclos.length - 2] : null;
+
+    for (const r of salesRows) {
+      if (r.Ciclo !== cicloAtual && r.Ciclo !== cicloAnterior) continue;
+
+      const sku = r.CodigoProduto;
+      const cidade = (r.Cidade || "").trim();
+      if (!sku || !cidade) continue;
+
+      if (!map.has(sku)) map.set(sku, new Map());
+      const inner = map.get(sku);
+      if (!inner.has(cidade)) {
+        inner.set(cidade, { prev: 0, curr: 0 });
+      }
+      const bucket = inner.get(cidade);
+      if (r.Ciclo === cicloAtual) {
+        bucket.curr += r.QtdVendida || 0;
+      } else if (r.Ciclo === cicloAnterior) {
+        bucket.prev += r.QtdVendida || 0;
+      }
+    }
+
+    return map;
+  }, [salesRows]);
+
   const sugestaoMinimoView = useMemo(() => {
     return sugestaoMinimo.filter((r) => {
       // Filtro por categoria
@@ -1775,26 +1946,30 @@ export default function DashboardEstoquePage() {
       // CENÁRIO COM TRANSFERÊNCIAS -> primeiro tenta cobrir com quem tem sobra
       let i = 0;
       let j = 0;
-      while (i < sources.length && j < sinks.length) {
-        const give = Math.min(sources[i].qty, sinks[j].qty);
-        if (give > 0) {
-          transfers.push({
-            SKU: sku,
-            Descricao: desc,
-            Origem: sources[i].city,
-            Destino: sinks[j].city,
-            Qtd: give,
-          });
-          totalTransfer += give;
-          moves += 1;
-        }
-        sources[i].qty -= give;
-        sinks[j].qty -= give;
-        if (sources[i].qty === 0) i++;
-        if (sinks[j].qty === 0) j++;
+            if (applyTransfers) {
+        while (i < sources.length && j < sinks.length) {
+                const give = Math.min(sources[i].qty, sinks[j].qty);
+                if (give > 0) {
+                  transfers.push({
+                    SKU: sku,
+                    Descricao: desc,
+                    Origem: sources[i].city,
+                    Destino: sinks[j].city,
+                    Qtd: give,
+                  });
+                  totalTransfer += give;
+                  moves += 1;
+                }
+                sources[i].qty -= give;
+                sinks[j].qty -= give;
+                if (sources[i].qty === 0) i++;
+                if (sinks[j].qty === 0) j++;
+              }
+
+      
       }
 
-      // O que ainda falta depois das transferências -> compra
+// O que ainda falta depois das transferências -> compra
       for (; j < sinks.length; j++) {
         const q = sinks[j].qty;
         const city = sinks[j].city;
@@ -1812,10 +1987,17 @@ export default function DashboardEstoquePage() {
             continue;
           }
 
+          const vendasInfo =
+            vendasCicloCidade.get(sku)?.get(city) || { prev: 0, curr: 0 };
+          const vendasCicloAnterior = vendasInfo.prev || 0;
+          const vendasCicloAtual = vendasInfo.curr || 0;
+
           buys.push({
             SKU: sku,
             Descricao: desc,
             Cidade: city,
+            VendasCicloAnterior: vendasCicloAnterior,
+            VendasCicloAtual: vendasCicloAtual,
             Qtd: q,
             ValorUnit: valorUnit,
             ValorTotal: valorTotal,
@@ -1857,6 +2039,7 @@ export default function DashboardEstoquePage() {
     planDays,
     planDesativMode,
     buyDesativMode,
+    applyTransfers,
   ]);
 
   const planCityOptions = useMemo(() => {
@@ -3011,11 +3194,61 @@ function exportMinimoXlsx() {
       {/* PLANO TRANSFERÊNCIAS & COMPRAS */}
       <div className="max-w-7xl mx-auto px-6 mt-10 mb-10 space-y-4">
         <Card borderColor="rgba(239,68,68,.35)">
-          {/* Título centralizado + filtros */}
+          {/* Cabeçalho - Plano de Transferências & Compras */}
           <div className="no-print mb-4">
-            <h2 className="text-lg font-semibold text-center mb-3">
-              Plano de Transferências &amp; Compras
-            </h2>
+            <div className="flex items-center justify-between gap-3 mb-3">
+              <div className="flex-1" />
+              <h2 className="flex-1 text-lg font-semibold text-center">
+                Plano de Transferências &amp; Compras
+              </h2>
+              <div className="flex-1 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPlanCityFilter("Todas");
+                    setPlanCurveFilter("Todas");
+                    setPlanCategoryFilter("Todas");
+                    setPlanDays("21");
+                    setPlanDesativMode("todos");
+                    setBuyDesativMode("excluir");
+                  }}
+                  className="rounded-lg px-3 py-2 text-xs sm:text-sm font-medium shadow"
+                  style={{ background: "rgba(148,163,184,.5)" }}
+                >
+                  Limpar filtros
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowPlanDetail((v) => !v)}
+                  className="rounded-lg px-3 py-2 text-xs sm:text-sm font-medium shadow"
+                  style={{ background: C_PURPLE }}
+                >
+                  {showPlanDetail ? "Ocultar detalhe" : "Ver detalhe"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setApplyTransfers((v) => !v)}
+                  className="rounded-lg px-3 py-2 text-xs sm:text-sm font-medium shadow border border-white/30"
+                  style={{
+                    background: applyTransfers
+                      ? "rgba(34,197,94,.4)"
+                      : "rgba(148,163,184,.4)",
+                  }}
+                >
+                  {applyTransfers
+                    ? "Aplicar transferências: SIM"
+                    : "Aplicar transferências: NÃO"}
+                </button>
+                <button
+                  type="button"
+                  onClick={exportPlanXlsx}
+                  className="rounded-lg px-3 py-2 text-xs sm:text-sm font-medium shadow"
+                  style={{ background: C_BLUE }}
+                >
+                  Exportar Plano XLSX
+                </button>
+              </div>
+            </div>
 
             <div className="flex flex-wrap items-center justify-center gap-2">
               <SelectDark
@@ -3530,6 +3763,8 @@ function exportMinimoXlsx() {
                           "Categoria",
                           "Desativação",
                           "Cidade",
+                          "Vendas ciclo ant.",
+                          "Vendas ciclo atual",
                           "Qtd a comprar",
                           "Valor unitário",
                           "Total compra",
@@ -3592,6 +3827,12 @@ function exportMinimoXlsx() {
                                 {r.Cidade}
                               </td>
                               <td className="px-3 py-2 text-right">
+                                {r.VendasCicloAnterior ?? 0}
+                              </td>
+                              <td className="px-3 py-2 text-right">
+                                {r.VendasCicloAtual ?? 0}
+                              </td>
+                              <td className="px-3 py-2 text-right">
                                 {r.Qtd}
                               </td>
                               <td className="px-3 py-2 text-right">
@@ -3614,7 +3855,7 @@ function exportMinimoXlsx() {
                           className="border-t"
                           style={{ borderColor: C_CARD_BORDER }}
                         >
-                          <td className="px-3 py-4" colSpan={9}>
+                          <td className="px-3 py-4" colSpan={11}>
                             Nenhuma compra necessária.
                           </td>
                         </tr>
