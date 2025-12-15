@@ -351,6 +351,7 @@ export default function DashboardEstoquePage() {
   const [salesRows, setSalesRows] = useState([]);
   const [skuList, setSkuList] = useState([]);
   const [skuSel, setSkuSel] = useState("Todos");
+  const [skuSearchVendas, setSkuSearchVendas] = useState("");
   const [selectedCycle, setSelectedCycle] = useState("Todos");
   const [showCycleDetail, setShowCycleDetail] = useState(false);
 
@@ -616,7 +617,40 @@ export default function DashboardEstoquePage() {
     for (const sheetName of wb.SheetNames) {
       const ws = wb.Sheets[sheetName];
       if (!ws) continue;
-      const raw = XLSX.utils.sheet_to_json(ws, { defval: null });
+
+      // Garante que o range inclua pelo menos até a coluna Z (para pegar Y e Z mesmo se o !ref estiver curto)
+      try {
+        if (ws["!ref"]) {
+          const r = XLSX.utils.decode_range(ws["!ref"]);
+          if (r.e.c < 25) { // 0-based: Z = 25
+            r.e.c = 25;
+            ws["!ref"] = XLSX.utils.encode_range(r);
+          }
+        }
+      } catch (e) {
+        // ignora, segue com o !ref original
+      }
+
+      // Lê como matriz (AOA) para respeitar posições fixas das colunas
+      // Lê como matriz (A1..Z...) preservando posição de colunas (inclui vazios no meio)
+      const aoa = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null, blankrows: false });
+      if (!aoa.length) continue;
+
+      const headerRow = aoa[0] || [];
+      const headers = headerRow.map((h, i) => {
+        const s = h == null ? "" : String(h).trim();
+        return s ? s : `__COL_${i}`; // placeholder para cabeçalhos vazios
+      });
+
+      const raw = [];
+      for (let ri = 1; ri < aoa.length; ri++) {
+        const row = aoa[ri] || [];
+        const obj = {};
+        for (let ci = 0; ci < headers.length; ci++) {
+          obj[headers[ci]] = row[ci] ?? null;
+        }
+        raw.push(obj);
+      }
       if (!raw.length) continue;
 
       const headerMap = {};
@@ -627,6 +661,23 @@ export default function DashboardEstoquePage() {
         }
         return null;
       };
+
+      const toNumLoose = (v) => {
+        if (v == null) return 0;
+        if (typeof v === "number") return Number.isFinite(v) ? v : 0;
+        const s = String(v).trim();
+        if (!s) return 0;
+        // aceita 1.234,56 e 1234,56
+        const norm = s.replace(/\./g, "").replace(",", ".");
+        const n = Number(norm);
+        return Number.isFinite(n) ? n : 0;
+      };
+
+      // Atenção: Y e Z são posições fixas (0-based 24 e 25) na planilha
+      const colsInOrder = headers;
+      const colY = colsInOrder[24] || null; // Coluna Y
+      const colZ = colsInOrder[25] || null; // Coluna Z
+
 
       const skuCol = findCol([
         "sku",
@@ -681,6 +732,16 @@ export default function DashboardEstoquePage() {
         "valor unit",
       ]);
 
+      // ✅ Força: "Vendas ciclo atual" deve vir da coluna Z (posição fixa)
+      // Se por algum motivo a planilha não tiver até Z, cai no detector por nome.
+      const vendasCicloAtualCol = colZ; // Coluna Z
+
+
+      // ✅ Força: "Vendas ciclo ant." deve vir da coluna Y (posição fixa)
+      // Se por algum motivo a planilha não tiver até Y, cai no detector por nome.
+      const vendasCicloAnteriorCol = colY; // Coluna Y
+
+
       let pdvCol = null;
       for (const rawKey in headerMap) {
         if (headerMap[rawKey] === "pdv") {
@@ -723,6 +784,17 @@ export default function DashboardEstoquePage() {
         "promoção proximo ciclo",
         "promoção prox ciclo",
       ]);
+
+      const compraInteligenteCol =
+        findCol([
+          "compra inteligente proximo ciclo",
+          "compra inteligente prox ciclo",
+          "compra inteligente",
+        ]) ||
+        Object.keys(headerMap).find((k) =>
+          headerMap[k].includes("compra inteligente")
+        ) ||
+        null;
 
       if (!skuCol) continue;
 
@@ -785,6 +857,9 @@ export default function DashboardEstoquePage() {
           PromocaoTexto: rawPromo,
           PromoCiclo: cicloPromo,
           PromoDescontoPercent: descontoPercent,
+          CompraInteligenteProxCiclo: compraInteligenteCol ? toNumLoose(r[compraInteligenteCol]) : 0,
+          VendasCicloAnteriorYZ: vendasCicloAnteriorCol ? toNumLoose(r[vendasCicloAnteriorCol]) : 0,
+          VendasCicloAtualYZ: vendasCicloAtualCol ? toNumLoose(r[vendasCicloAtualCol]) : 0,
         });
       }
 
@@ -1261,6 +1336,44 @@ export default function DashboardEstoquePage() {
     return map;
   }, [allRowsEstoque]);
 
+
+  const compraInteligenteBySkuCity = useMemo(() => {
+    const map = new Map(); // sku -> Map(cidade -> compra inteligente prox ciclo)
+    for (const r of allRowsEstoque) {
+      if (r.CodigoProduto == null) continue;
+      const sku = String(r.CodigoProduto).trim();
+      if (!sku) continue;
+      const cidade = (r.Cidade || "").trim();
+      if (!cidade) continue;
+
+      const raw = r.CompraInteligenteProxCiclo;
+      const val = Number(raw ?? 0) || 0;
+      if (!map.has(sku)) map.set(sku, new Map());
+      const inner = map.get(sku);
+      inner.set(cidade, (inner.get(cidade) || 0) + val);
+    }
+    return map;
+  }, [allRowsEstoque]);
+
+  const vendasYZBySkuCity = useMemo(() => {
+    const map = new Map(); // sku -> Map(cidade -> { prev, curr })
+    for (const r of allRowsEstoque) {
+      const sku = String(r.CodigoProduto ?? "").trim();
+      if (!sku) continue;
+      const cidade = (r.Cidade || "").trim();
+      if (!cidade) continue;
+
+      const prev = Number(r.VendasCicloAnteriorYZ ?? 0) || 0;
+      const curr = Number(r.VendasCicloAtualYZ ?? 0) || 0;
+
+      if (!map.has(sku)) map.set(sku, new Map());
+      const inner = map.get(sku);
+      const acc = inner.get(cidade) || { prev: 0, curr: 0 };
+      inner.set(cidade, { prev: acc.prev + prev, curr: acc.curr + curr });
+    }
+    return map;
+  }, [allRowsEstoque]);
+
   const skuOptions = useMemo(() => {
     if (!skuList || !skuList.length) return ["Todos"];
     return skuList.map((sku) => {
@@ -1275,6 +1388,20 @@ export default function DashboardEstoquePage() {
       };
     });
   }, [skuList, skuMeta]);
+  const skuOptionsFiltered = useMemo(() => {
+    if (!skuOptions || !skuOptions.length) return [];
+    const q = (skuSearchVendas || "").trim().toLowerCase();
+    if (!q) return skuOptions;
+    return skuOptions.filter((opt) => {
+      if (typeof opt === "string") {
+        return opt.toLowerCase().includes(q);
+      }
+      const val = String(opt.value || "").toLowerCase();
+      const label = String(opt.label || "").toLowerCase();
+      return val.includes(q) || label.includes(q);
+    });
+  }, [skuOptions, skuSearchVendas]);
+
 
   const statsPorSku = useMemo(() => {
     const bySkuCiclo = new Map();
@@ -1310,6 +1437,22 @@ export default function DashboardEstoquePage() {
     }
     return out;
   }, [salesRows]);
+
+  const rankingMelhorMomento = useMemo(() => {
+    const list = [];
+    for (const [sku, st] of statsPorSku.entries()) {
+      const descricao = skuMeta.get(sku) || "";
+      list.push({
+        sku,
+        descricao,
+        pico: st.maxv || 0,
+        media: st.mean || 0,
+        ciclos: st.n || 0,
+      });
+    }
+    list.sort((a, b) => b.pico - a.pico);
+    return list.slice(0, 20);
+  }, [statsPorSku, skuMeta]);
 
   const sugestaoMinimo = useMemo(() => {
     const list = [];
@@ -1420,6 +1563,40 @@ export default function DashboardEstoquePage() {
         bucket.curr += r.QtdVendida || 0;
       } else if (r.Ciclo === cicloAnterior) {
         bucket.prev += r.QtdVendida || 0;
+      }
+    }
+
+    return map;
+  }, [salesRows]);
+
+
+  const bestMomentBySkuCity = useMemo(() => {
+    const map = new Map();
+    if (!salesRows || !salesRows.length) return map;
+
+    for (const r of salesRows) {
+      const sku = r.CodigoProduto;
+      const cidade = (r.Cidade || "").trim();
+      const ciclo = r.Ciclo;
+      const qtd = r.QtdVendida || 0;
+
+      if (!sku || !cidade || !ciclo || !qtd) continue;
+
+      if (!map.has(sku)) {
+        map.set(sku, new Map());
+      }
+      const inner = map.get(sku);
+      if (!inner.has(cidade)) {
+        inner.set(cidade, { bestCycle: ciclo, bestQty: qtd });
+      } else {
+        const curr = inner.get(cidade);
+        if (
+          qtd > curr.bestQty ||
+          (qtd === curr.bestQty &&
+            cicloKey(ciclo) > cicloKey(curr.bestCycle))
+        ) {
+          inner.set(cidade, { bestCycle: ciclo, bestQty: qtd });
+        }
       }
     }
 
@@ -1988,9 +2165,15 @@ export default function DashboardEstoquePage() {
           }
 
           const vendasInfo =
-            vendasCicloCidade.get(sku)?.get(city) || { prev: 0, curr: 0 };
+            vendasYZBySkuCity.get(sku)?.get(city) || { prev: 0, curr: 0 };
           const vendasCicloAnterior = vendasInfo.prev || 0;
           const vendasCicloAtual = vendasInfo.curr || 0;
+
+          const bestInfo = bestMomentBySkuCity.get(sku)?.get(city);
+          const melhorMomento = bestInfo?.bestCycle || "";
+
+          const compraInteligente =
+            compraInteligenteBySkuCity.get(sku)?.get(city) || 0;
 
           buys.push({
             SKU: sku,
@@ -1998,6 +2181,8 @@ export default function DashboardEstoquePage() {
             Cidade: city,
             VendasCicloAnterior: vendasCicloAnterior,
             VendasCicloAtual: vendasCicloAtual,
+            MelhorMomento: melhorMomento,
+            CompraInteligenteProxCiclo: compraInteligente,
             Qtd: q,
             ValorUnit: valorUnit,
             ValorTotal: valorTotal,
@@ -2802,12 +2987,25 @@ function exportMinimoXlsx() {
           }
         >
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
-            <SelectDark
-              label="SKU (Produto)"
-              value={skuSel}
-              onChange={(e) => setSkuSel(e.target.value)}
-              options={skuOptions}
-            />
+            <div>
+              <p className="text-xs text-white/70 mb-1">SKU (Produto)</p>
+              <div className="space-y-1">
+                <input
+                  type="text"
+                  value={skuSearchVendas}
+                  onChange={(e) => setSkuSearchVendas(e.target.value)}
+                  placeholder="Digite código ou nome..."
+                  className="w-full rounded-lg border border-white/10 bg-[#0f172a] px-3 py-2 text-sm text-white"
+                  style={{ colorScheme: "dark" }}
+                />
+                <SelectDark
+                  label="Lista de SKUs"
+                  value={skuSel}
+                  onChange={(e) => setSkuSel(e.target.value)}
+                  options={skuOptionsFiltered}
+                />
+              </div>
+            </div>
             <SelectDark
               label="Ciclo (para detalhe)"
               value={selectedCycle}
@@ -2907,6 +3105,56 @@ function exportMinimoXlsx() {
               </BarChart>
             </ResponsiveContainer>
           </div>
+
+          {rankingMelhorMomento && rankingMelhorMomento.length > 0 && (
+            <div className="mt-6">
+              <h3 className="text-sm font-medium text-white/80 mb-2">
+                Ranking de SKUs por pico de vendas (últimos 17 ciclos)
+              </h3>
+              <div className="overflow-auto max-h-72 rounded-xl border border-white/10 bg-black/20">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="text-left border-b border-white/10">
+                      <th className="px-3 py-2">#</th>
+                      <th className="px-3 py-2">SKU</th>
+                      <th className="px-3 py-2">Descrição</th>
+                      <th className="px-3 py-2 text-right">Pico (unid.)</th>
+                      <th className="px-3 py-2 text-right">Média 17 ciclos</th>
+                      <th className="px-3 py-2 text-right">Qtd ciclos</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rankingMelhorMomento.map((r, idx) => (
+                      <tr
+                        key={r.sku}
+                        className="border-t border-white/5 hover:bg-white/5 transition"
+                      >
+                        <td className="px-3 py-2">{idx + 1}</td>
+                        <td className="px-3 py-2 whitespace-nowrap">
+                          {r.sku}
+                        </td>
+                        <td className="px-3 py-2">
+                          {r.descricao}
+                        </td>
+                        <td className="px-3 py-2 text-right">
+                          {r.pico.toLocaleString("pt-BR")}
+                        </td>
+                        <td className="px-3 py-2 text-right">
+                          {r.media.toLocaleString("pt-BR", {
+                            minimumFractionDigits: 1,
+                            maximumFractionDigits: 1,
+                          })}
+                        </td>
+                        <td className="px-3 py-2 text-right">
+                          {r.ciclos}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
         </Card>
       </div>
 
@@ -3765,6 +4013,8 @@ function exportMinimoXlsx() {
                           "Cidade",
                           "Vendas ciclo ant.",
                           "Vendas ciclo atual",
+                          "Melhor momento",
+                          "Compra intelig. prox ciclo",
                           "Qtd a comprar",
                           "Valor unitário",
                           "Total compra",
@@ -3832,6 +4082,12 @@ function exportMinimoXlsx() {
                               <td className="px-3 py-2 text-right">
                                 {r.VendasCicloAtual ?? 0}
                               </td>
+                              <td className="px-3 py-2">
+                                {r.MelhorMomento || ""}
+                              </td>
+                              <td className="px-3 py-2 text-right">
+                                {r.CompraInteligenteProxCiclo ?? 0}
+                              </td>
                               <td className="px-3 py-2 text-right">
                                 {r.Qtd}
                               </td>
@@ -3855,7 +4111,7 @@ function exportMinimoXlsx() {
                           className="border-t"
                           style={{ borderColor: C_CARD_BORDER }}
                         >
-                          <td className="px-3 py-4" colSpan={11}>
+                          <td className="px-3 py-4" colSpan={13}>
                             Nenhuma compra necessária.
                           </td>
                         </tr>
