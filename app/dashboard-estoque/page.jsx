@@ -113,6 +113,7 @@ const C_GREEN = "#22c55e";
 const C_AMBER = "#f59e0b";
 const C_ROSE = "#ef4444";
 const C_PURPLE = "#7c3aed";
+const C_GRAY = "rgba(255,255,255,0.18)";
 const C_CARD_BORDER = "rgba(255,255,255,0.10)";
 const C_CARD_BG = "rgba(255,255,255,0.03)";
 const PIE_COLORS = [C_BLUE, C_GREEN, C_AMBER];
@@ -126,6 +127,62 @@ function normalize(str) {
     .replace(/\s+/g, " ")
     .trim();
 }
+
+function normText(str) {
+  return normalize(str);
+}
+
+// Extrai o SKU de um texto de sugestão do datalist (ex: "12345 — Produto X" ou "12345 - Produto X")
+function parseSkuFromLabel(label) {
+  const s = String(label || "").trim();
+  if (!s) return "";
+  // pega o primeiro "token" (números/letras) no início
+  const m = s.match(/^([0-9A-Za-z]+)/);
+  if (m && m[1]) return m[1].trim();
+
+  // fallback por separadores
+  if (s.includes("—")) return s.split("—")[0].trim();
+  if (s.includes("-")) return s.split("-")[0].trim();
+
+  return s.split(/\s+/)[0].trim();
+}
+
+function stripSkuPrefix(label, sku) {
+  const s = String(label || "").trim();
+  const k = String(sku || "").trim();
+  if (!s || !k) return s;
+  return s.replace(new RegExp("^" + k.replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&") + "\\s*[—-]\\s*", "i"), "").trim();
+}
+
+/**
+ * Horizonte (dias) para ajustar SOMENTE a quantidade a comprar (Plano de Compras)
+ * Regras:
+ * - BEBEDOURO VD: A=50, B=40, C=25, E=20
+ * - Demais cidades: A=40, B=30, C=25, E=20
+ */
+function planDaysByCityCurve(city, classe) {
+  const c = String(classe || "").trim().toUpperCase();
+  const cityNorm = String(city || "").trim().toUpperCase();
+  const isBebedouroVD =
+    cityNorm === "BEBEDOURO VD" || cityNorm.includes("BEBEDOURO VD");
+
+  if (isBebedouroVD) {
+    if (c === "A") return 50;
+    if (c === "B") return 40;
+    if (c === "C") return 25;
+    if (c === "E") return 20;
+    return 25;
+  }
+
+  if (c === "A") return 40;
+  if (c === "B") return 30;
+  if (c === "C") return 25;
+  if (c === "E") return 20;
+  return 25;
+}
+
+
+
 
 function cicloKey(c) {
   const s = String(c || "");
@@ -244,13 +301,13 @@ function Card({ title, borderColor = C_CARD_BORDER, children, right = null }) {
 
   return (
     <section
-      className="rounded-2xl p-4 shadow-sm"
+      className="rounded-xl p-2 shadow-sm"
       style={{ border: `1px solid ${borderColor}`, background: C_CARD_BG }}
     >
       {hasHeader && (
-        <div className="flex items-end justify-between gap-3 mb-3">
+        <div className="flex items-end justify-between gap-2 mb-2">
           {title && (
-            <h2 className="text-lg font-semibold">{title}</h2>
+            <h2 className="text-base font-semibold">{title}</h2>
           )}
           {right}
         </div>
@@ -265,10 +322,10 @@ function Kpi({ title, value, color = C_BLUE, raw = false, size = "lg" }) {
     ? String(value ?? "")
     : Number(value || 0).toLocaleString("pt-BR");
   const sizeClass =
-    size === "sm" ? "text-base" : size === "md" ? "text-2xl" : "text-3xl";
+    size === "sm" ? "text-sm" : size === "md" ? "text-base" : "text-2xl";
   return (
     <div
-      className="rounded-2xl p-4"
+      className="rounded-xl p-2"
       style={{ border: `1px solid ${C_CARD_BORDER}`, background: C_CARD_BG }}
     >
       <p className="text-xs text-white/70">{title}</p>
@@ -287,7 +344,7 @@ function SelectDark({ label, value, onChange, options, className = "" }) {
         <select
           value={value}
           onChange={onChange}
-          className="w-full appearance-none rounded-lg border border-white/10 bg-[#0f172a] px-3 py-2 text-sm text-white pr-9"
+          className="w-full rounded-lg border border-white/10 bg-[#0f172a] px-3 py-2 text-sm text-white"
           style={{ colorScheme: "dark" }}
         >
           {options.map((opt) => {
@@ -305,14 +362,6 @@ function SelectDark({ label, value, onChange, options, className = "" }) {
             );
           })}
         </select>
-        <svg
-          className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 opacity-80"
-          width="16"
-          height="16"
-          viewBox="0 0 24 24"
-        >
-          <path fill="currentColor" d="M7 10l5 5l5-5z" />
-        </svg>
       </div>
     </div>
   );
@@ -368,13 +417,14 @@ export default function DashboardEstoquePage() {
   const [planCityFilter, setPlanCityFilter] = useState("Todas");
   const [planCurveFilter, setPlanCurveFilter] = useState("Todas");
   const [planCategoryFilter, setPlanCategoryFilter] = useState("Todas");
+const [planSkuQuery, setPlanSkuQuery] = useState("");
   const [planDays, setPlanDays] = useState("21"); // horizonte em dias (~1 ciclo)
   const [planDesativMode, setPlanDesativMode] = useState("todos"); // opção 4
   const [buyDesativMode, setBuyDesativMode] = useState("excluir"); // opção 2
   const [applyTransfers, setApplyTransfers] = useState(true);
 
   // Promoções - filtros / controles do card
-  const [promoSkuFilter, setPromoSkuFilter] = useState("Todos");
+  const [promoSkuFilter, setPromoSkuFilter] = useState("");
   const [promoCurveFilter, setPromoCurveFilter] = useState("Todas");
   const [promoHorizonDays, setPromoHorizonDays] = useState("21");
   const [showPromoDetail, setShowPromoDetail] = useState(false);
@@ -463,7 +513,7 @@ export default function DashboardEstoquePage() {
         if (data.planDesativMode) setPlanDesativMode(data.planDesativMode);
         if (data.buyDesativMode) setBuyDesativMode(data.buyDesativMode);
 
-        if (data.promoSkuFilter) setPromoSkuFilter(data.promoSkuFilter);
+        if (typeof data.promoSkuFilter === "string") setPromoSkuFilter(data.promoSkuFilter);
         if (data.promoCurveFilter) setPromoCurveFilter(data.promoCurveFilter);
         if (data.promoHorizonDays)
           setPromoHorizonDays(String(data.promoHorizonDays));
@@ -496,7 +546,7 @@ export default function DashboardEstoquePage() {
         if (data.planDesativMode) setPlanDesativMode(data.planDesativMode);
         if (data.buyDesativMode) setBuyDesativMode(data.buyDesativMode);
 
-        if (data.promoSkuFilter) setPromoSkuFilter(data.promoSkuFilter);
+        if (typeof data.promoSkuFilter === "string") setPromoSkuFilter(data.promoSkuFilter);
         if (data.promoCurveFilter) setPromoCurveFilter(data.promoCurveFilter);
         if (data.promoHorizonDays)
           setPromoHorizonDays(String(data.promoHorizonDays));
@@ -1031,11 +1081,14 @@ export default function DashboardEstoquePage() {
         acc.DescricaoProduto = r.DescricaoProduto;
       }
     }
-    const q = (query || "").toLowerCase();
+    const qRaw = (query || "").toLowerCase();
+    const qSku = parseSkuFromLabel(qRaw).toLowerCase();
+    const q = qRaw;
     const list = Array.from(bySku.values()).filter(
       (r) =>
         String(r.CodigoProduto || "").toLowerCase().includes(q) ||
-        String(r.DescricaoProduto || "").toLowerCase().includes(q)
+        String(r.DescricaoProduto || "").toLowerCase().includes(q) ||
+        (qSku ? String(r.CodigoProduto || "").toLowerCase().includes(qSku) : false)
     );
     for (const item of list) {
       const cities = Array.from(item._cities);
@@ -1054,6 +1107,26 @@ export default function DashboardEstoquePage() {
     }
     return list;
   }, [rowsProcessed, cityFilter, query]);
+
+  const skuSuggestionsResumo = useMemo(() => {
+    const q = normText(query);
+    if (!q) return [];
+    const seen = new Set();
+    const out = [];
+    for (const r of rowsAgg || []) {
+      const sku = String(r.CodigoProduto ?? "").trim();
+      const desc = String(r.DescricaoProduto ?? "").trim();
+      if (!sku) continue;
+      const label = desc ? `${sku} — ${desc}` : sku;
+      if (normText(label).includes(q) && !seen.has(sku)) {
+        seen.add(sku);
+        out.push(label);
+        if (out.length >= 50) break;
+      }
+    }
+    return out;
+  }, [query, rowsAgg]);
+
 
   const totEst = useMemo(
     () => rowsAgg.reduce((s, r) => s + (r.EstoqueAtual || 0), 0),
@@ -1402,6 +1475,35 @@ export default function DashboardEstoquePage() {
     });
   }, [skuOptions, skuSearchVendas]);
 
+  const skuSuggestionsVendas = useMemo(() => {
+    const q = normText(skuSearchVendas);
+    if (!q) return [];
+    const seen = new Set();
+    const out = [];
+    for (const opt of skuOptions || []) {
+      let sku = "";
+      let desc = "";
+      if (typeof opt === "string") {
+        // pode vir "SKU — Descrição" ou apenas SKU
+        const raw = opt;
+        sku = parseSkuFromLabel(raw);
+        desc = raw.includes("—") ? raw.split("—").slice(1).join("—").trim() : "";
+      } else {
+        sku = String(opt.value ?? "").trim();
+        desc = stripSkuPrefix(String(opt.label ?? "").trim(), sku);
+      }
+      if (!sku) continue;
+      const label = desc ? `${sku} — ${desc}` : sku;
+      if (normText(label).includes(q) && !seen.has(sku)) {
+        seen.add(sku);
+        out.push(label);
+        if (out.length >= 50) break;
+      }
+    }
+    return out;
+  }, [skuOptions, skuSearchVendas]);
+
+
 
   const statsPorSku = useMemo(() => {
     const bySkuCiclo = new Map();
@@ -1603,7 +1705,19 @@ export default function DashboardEstoquePage() {
     return map;
   }, [salesRows]);
 
-  const sugestaoMinimoView = useMemo(() => {
+  
+  const minCategoryOptions = useMemo(() => {
+    const set = new Set();
+    for (const r of sugestaoMinimo) {
+      const cat = (skuCategoria.get(r.SKU) || r.Categoria || "").trim();
+      if (cat) set.add(cat);
+    }
+    return ["Todas", ...Array.from(set).sort((a, b) => a.localeCompare(b))];
+  }, [sugestaoMinimo, skuCategoria]);
+
+  const minCityOptions = useMemo(() => cityOptions, [cityOptions]);
+
+const sugestaoMinimoView = useMemo(() => {
     return sugestaoMinimo.filter((r) => {
       // Filtro por categoria
       if (minCategoryFilter !== "Todas") {
@@ -1623,11 +1737,12 @@ export default function DashboardEstoquePage() {
         if (!share || !share.has(minCityFilter)) return false;
       }
 
-      // Filtro por SKU (texto)
+      // Filtro por SKU/Descrição (texto)
       if (minSkuQuery.trim()) {
-        const q = minSkuQuery.trim();
-        const skuStr = String(r.SKU || "");
-        if (!skuStr.includes(q)) return false;
+        const q = normText(minSkuQuery);
+        const skuStr = normText(r.SKU || r.CodigoProduto || "");
+        const descStr = normText(r.Descricao || r.DescricaoProduto || "");
+        if (!skuStr.includes(q) && !descStr.includes(q)) return false;
       }
 
       return true;
@@ -1642,6 +1757,26 @@ export default function DashboardEstoquePage() {
     skuClasse,
     salesShareCity,
   ]);
+
+  const minSkuSuggestions = useMemo(() => {
+    const q = normText(minSkuQuery);
+    if (!q) return [];
+    const seen = new Set();
+    const out = [];
+    for (const r of sugestaoMinimoView || []) {
+      const sku = String(r.SKU ?? r.CodigoProduto ?? "").trim();
+      const desc = String(r.Descricao ?? r.DescricaoProduto ?? "").trim();
+      if (!sku) continue;
+      const label = desc ? `${sku} — ${desc}` : sku;
+      if (normText(label).includes(q) && !seen.has(sku)) {
+        seen.add(sku);
+        out.push(label);
+        if (out.length >= 50) break;
+      }
+    }
+    return out;
+  }, [minSkuQuery, sugestaoMinimoView]);
+
 
   const minChartDataView = useMemo(
     () =>
@@ -1879,12 +2014,37 @@ export default function DashboardEstoquePage() {
       { value: "Todos", label: "Todos" },
       ...skus.map((sku) => ({
         value: sku,
-        label: `${sku} - ${
-          sugestaoMinimo.find((x) => x.SKU === sku)?.Descricao || ""
-        }`,
+        label: `${sugestaoMinimo.find((x) => x.SKU === sku)?.Descricao || ""}`,
       })),
     ];
   }, [promoSuggestions, sugestaoMinimo]);
+
+  const promoSkuSuggestions = useMemo(() => {
+    const q = normText(promoSkuFilter);
+    if (!q) return [];
+    const seen = new Set();
+    const out = [];
+    for (const opt of promoSkuOptions || []) {
+      let sku = "";
+      let desc = "";
+      if (typeof opt === "string") {
+        sku = parseSkuFromLabel(opt);
+        desc = opt.includes("—") ? opt.split("—").slice(1).join("—").trim() : "";
+      } else {
+        sku = String(opt.value ?? "").trim();
+        desc = String(opt.label ?? "").trim();
+      }
+      if (!sku) continue;
+      const label = desc ? `${sku} — ${desc}` : sku;
+      if (normText(label).includes(q) && !seen.has(sku)) {
+        seen.add(sku);
+        out.push(label);
+        if (out.length >= 50) break;
+      }
+    }
+    return out;
+  }, [promoSkuFilter, promoSkuOptions]);
+
 
   // Opções de curva para o card de promoção
   const promoCurveOptions = useMemo(() => {
@@ -1905,6 +2065,32 @@ export default function DashboardEstoquePage() {
 
     // Horizonte: considerar sugestão base como ~1 ciclo (21 dias)
     const BASE_CYCLE_DAYS = 365 / 17;
+
+    // Horizonte (dias) para ajustar SOMENTE a quantidade a comprar (Plano de Compras)
+    // Regras:
+    // - BEBEDOURO VD: A=50, B=40, C=25, E=20
+    // - Demais cidades: A=40, B=30, C=25, E=20
+    const planDaysByCityCurve = (city, classe) => {
+      const c = String(classe || "").trim().toUpperCase();
+      const cityNorm = String(city || "").trim().toUpperCase();
+      const isBebedouroVD =
+        cityNorm === "BEBEDOURO VD" || cityNorm.includes("BEBEDOURO VD");
+
+      if (isBebedouroVD) {
+        if (c === "A") return 50;
+        if (c === "B") return 40;
+        if (c === "C") return 25;
+        if (c === "E") return 20;
+        return 25;
+      }
+
+      if (c === "A") return 40;
+      if (c === "B") return 30;
+      if (c === "C") return 25;
+      if (c === "E") return 20;
+      return 25;
+    };
+
     const horizonDaysNum =
       Number(promoHorizonDays) > 0
         ? Number(promoHorizonDays)
@@ -1917,10 +2103,25 @@ export default function DashboardEstoquePage() {
     if (promoCurveFilter !== "Todas") {
       list = list.filter((r) => (r.Classe || "") === promoCurveFilter);
     }
+    // filtro por SKU/Descrição (texto ou seleção)
+    if (promoSkuFilter && String(promoSkuFilter).trim() && true) {
+      const raw = String(promoSkuFilter || "").trim();
+      const q = normText(raw);
+      const qSku = normText(typeof parseSkuFromLabel === "function" ? parseSkuFromLabel(raw) : raw);
 
-    // filtro por SKU
-    if (promoSkuFilter !== "Todos") {
-      list = list.filter((r) => r.SKU === promoSkuFilter);
+      list = list.filter((r) => {
+        const sku = normText(r.SKU || "");
+        const desc = normText(r.Descricao || r.DescricaoProduto || "");
+
+        // 1) busca por texto livre (código ou descrição)
+        if (q && (sku.includes(q) || desc.includes(q))) return true;
+
+        // 2) quando o usuário escolhe uma opção do datalist (ex: "12345 — Shampoo X"),
+        // o input fica com o texto completo; então filtramos pelo SKU extraído também.
+        if (qSku && sku.includes(qSku)) return true;
+
+        return false;
+      });
     }
 
     // aplica ajuste de horizonte (multiplica qtd e valor)
@@ -2147,9 +2348,24 @@ export default function DashboardEstoquePage() {
       }
 
 // O que ainda falta depois das transferências -> compra
-      for (; j < sinks.length; j++) {
-        const q = sinks[j].qty;
+            for (; j < sinks.length; j++) {
         const city = sinks[j].city;
+
+        const vendasInfo =
+          vendasYZBySkuCity.get(sku)?.get(city) || { prev: 0, curr: 0 };
+        const vendasCicloAnterior = vendasInfo.prev || 0;
+        const vendasCicloAtual = vendasInfo.curr || 0;
+
+        const days = planDaysByCityCurve(city, classe);
+        const estoqueAtualCidade = citiesMap.get(city)?.EstoqueAtual || 0;
+
+        // ✅ Recalcula SOMENTE a Qtd a comprar usando consumo diário * horizonte - estoque atual (cidade).
+        // Não altera vendas/melhor momento/compra inteligente.
+        const vendasMediaCiclo = (vendasCicloAnterior + vendasCicloAtual) / 2;
+        const consumoDia = vendasMediaCiclo / BASE_CYCLE_DAYS;
+        const alvo = consumoDia * days;
+        const q = Math.max(0, Math.ceil(alvo - estoqueAtualCidade));
+
         if (q > 0) {
           const priceMap = skuPrecoCidade.get(sku);
           const valorUnit = priceMap?.get(city) || 0;
@@ -2179,6 +2395,9 @@ export default function DashboardEstoquePage() {
             SKU: sku,
             Descricao: desc,
             Cidade: city,
+            HorizonteDias: planDaysByCityCurve(city, classe),
+            EstoqueAtualCidade: estoqueAtualCidade,
+            EstoqueAtualTotal: Array.from(citiesMap.values()).reduce((s, a) => s + (a?.EstoqueAtual || 0), 0),
             VendasCicloAnterior: vendasCicloAnterior,
             VendasCicloAtual: vendasCicloAtual,
             MelhorMomento: melhorMomento,
@@ -2255,18 +2474,78 @@ export default function DashboardEstoquePage() {
     return ["Todas", ...Array.from(set).sort((a, b) => a.localeCompare(b))];
   }, [sugestaoMinimo, skuCategoria]);
 
+
+  const planSkuSuggestions = useMemo(() => {
+    const q = normText(planSkuQuery);
+    if (!q) return [];
+    const seen = new Set();
+    const out = [];
+    const skus = new Set();
+    for (const t of transfers || []) skus.add(String(t.SKU || "").trim());
+    for (const b of buys || []) skus.add(String(b.SKU || "").trim());
+
+    for (const sku of Array.from(skus)) {
+      if (!sku) continue;
+      const desc =
+        (sugestaoMinimo?.find((x) => String(x.SKU || "").trim() === sku)?.Descricao ||
+          "");
+      const label = desc ? `${sku} — ${desc}` : sku;
+      if (normText(label).includes(q) && !seen.has(label)) {
+        seen.add(label);
+        out.push(label);
+        if (out.length >= 25) break;
+      }
+    }
+    return out;
+  }, [planSkuQuery, transfers, buys, sugestaoMinimo]);
+
   const transfersView = useMemo(() => {
-    if (planCityFilter === "Todas") return transfers;
-    return transfers.filter(
-      (t) =>
-        t.Origem === planCityFilter || t.Destino === planCityFilter
-    );
-  }, [transfers, planCityFilter]);
+    let list = transfers || [];
+    if (planCityFilter !== "Todas") {
+      list = list.filter(
+        (t) => t.Origem === planCityFilter || t.Destino === planCityFilter
+      );
+    }
+
+    if (planSkuQuery && String(planSkuQuery).trim()) {
+      const raw = String(planSkuQuery || "").trim();
+      const q = normText(raw);
+      const qSku = normText(parseSkuFromLabel(raw) || raw);
+      list = list.filter((t) => {
+        const sku = normText(t.SKU || "");
+        const desc = normText(t.Descricao || "");
+        return (
+          (q && (sku.includes(q) || desc.includes(q))) ||
+          (qSku && sku.includes(qSku))
+        );
+      });
+    }
+
+    return list;
+  }, [transfers, planCityFilter, planSkuQuery]);
 
   const buysView = useMemo(() => {
-    if (planCityFilter === "Todas") return buys;
-    return buys.filter((b) => b.Cidade === planCityFilter);
-  }, [buys, planCityFilter]);
+    let list = buys || [];
+    if (planCityFilter !== "Todas") {
+      list = list.filter((b) => b.Cidade === planCityFilter);
+    }
+
+    if (planSkuQuery && String(planSkuQuery).trim()) {
+      const raw = String(planSkuQuery || "").trim();
+      const q = normText(raw);
+      const qSku = normText(parseSkuFromLabel(raw) || raw);
+      list = list.filter((b) => {
+        const sku = normText(b.SKU || "");
+        const desc = normText(b.Descricao || "");
+        return (
+          (q && (sku.includes(q) || desc.includes(q))) ||
+          (qSku && sku.includes(qSku))
+        );
+      });
+    }
+
+    return list;
+  }, [buys, planCityFilter, planSkuQuery]);
 
   const transfersByDestino = useMemo(() => {
     const map = new Map();
@@ -2586,9 +2865,9 @@ function exportMinimoXlsx() {
   return (
     <div className="min-h-screen bg-[#0c1118] text-white">
       <header className="sticky top-0 z-20 border-b border-white/10 bg-[#0c1118]/80 backdrop-blur px-6 py-4">
-        <div className="max-w-7xl mx-auto flex items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <div className="h-9 w-9 rounded-xl overflow-hidden ring-1 ring-sky-500/40 bg-sky-500/10 grid place-items-center">
+        <div className="max-w-7xl mx-auto flex items-end justify-between gap-2">
+          <div className="flex items-end gap-2">
+            <div className="h-9 w-9 rounded-xl overflow-hidden ring-1 ring-sky-500/40 bg-sky-500/10 grid place-items-end">
               <Image
                 src="/logo/logo.png"
                 alt="BI Service"
@@ -2599,29 +2878,29 @@ function exportMinimoXlsx() {
             </div>
             <div className="leading-tight">
               <div className="text-sm text-white/70">BI Service Beta</div>
-              <h1 className="text-xl font-bold">
+              <h1 className="text-base font-bold">
                 <span>Dashboard</span>{" "}
                 <span style={{ color: C_GREEN }}>de Estoque</span>
               </h1>
             </div>
           </div>
 
-          <div className="flex items-center gap-2 no-print">
-            <label
-              className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium shadow"
-              style={{ background: C_GREEN }}
-            >
-              <svg
-                width="16"
-                height="16"
-                viewBox="0 0 24 24"
-                className="opacity-90"
+          <div className="flex items-end gap-2 no-print">
+            <div className="inline-flex items-end gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  if (fileRef.current) {
+                    fileRef.current.value = null; // permite reenviar o mesmo arquivo
+                    fileRef.current.click();
+                  }
+                }}
+                className="inline-flex items-end gap-2 rounded-lg px-3 py-2 text-sm font-medium shadow"
+                style={{ background: C_GREEN }}
               >
-                <path
-                  fill="currentColor"
-                  d="M19 15v4H5v-4H3v6h18v-6zM11 3v10.17l-3.59-3.58L6 11l6 6l6-6l-1.41-1.41L13 13.17V3z"
-                />
-              </svg>
+                Upload
+              </button>
+
               <input
                 ref={fileRef}
                 type="file"
@@ -2629,7 +2908,7 @@ function exportMinimoXlsx() {
                 onChange={onUpload}
                 className="hidden"
               />
-            </label>
+            </div>
 
             <a
               href="/dashboard"
@@ -2639,17 +2918,18 @@ function exportMinimoXlsx() {
               Conferência
             </a>
             <a
+              href="/dashboard-orcamento"
+              className="rounded-lg px-3 py-2 text-sm font-medium shadow"
+              style={{ background: C_BLUE }}
+            >
+              Orçamento
+            </a>
+            <a
               href="/"
-              className="rounded-lg px-3 py-2 text-sm font-medium shadow inline-flex items-center gap-2"
+              className="rounded-lg px-3 py-2 text-sm font-medium shadow inline-flex items-end gap-2"
               style={{ background: C_ROSE }}
             >
               Sair
-              <svg width="16" height="16" viewBox="0 0 24 24">
-                <path
-                  fill="currentColor"
-                  d="M12 4l1.41 1.41L9.83 9H20v2H9.83l3.58 3.59L12 16l-6-6z"
-                />
-              </svg>
             </a>
           </div>
         </div>
@@ -2718,12 +2998,12 @@ function exportMinimoXlsx() {
 
 
       {isLoading && (
-        <div className="fixed inset-0 z-10 bg-black/60 backdrop-blur-sm grid place-items-center no-print">
+        <div className="fixed inset-0 z-10 bg-black/60 backdrop-blur-sm grid place-items-end no-print">
           <div
-            className="w-full max-w-md rounded-2xl p-6"
+            className="w-full max-w-md rounded-xl p-2"
             style={{ background: "#0f172a", border: `1px solid ${C_CARD_BORDER}` }}
           >
-            <div className="flex items-center gap-3 mb-3">
+            <div className="flex items-end gap-2 mb-2">
               <svg
                 width="22"
                 height="22"
@@ -2739,9 +3019,9 @@ function exportMinimoXlsx() {
                   d="M12 4a8 8 0 0 1 8 8h3A11 11 0 0 0 12 1Z"
                 />
               </svg>
-              <h2 className="text-lg font-semibold">Processando arquivo</h2>
+              <h2 className="text-base font-semibold">Processando arquivo</h2>
             </div>
-            <p className="text-sm text-white/80 mb-3">
+            <p className="text-sm text-white/80 mb-2">
               {status || "Aguarde…"}
             </p>
             <div className="h-2 w-full bg-white/10 rounded">
@@ -2766,70 +3046,100 @@ function exportMinimoXlsx() {
           title="Resumo Total"
           borderColor="rgba(59,130,246,.35)"
         >
-          {/* Filtros */}
-          <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
-            <SelectDark
-              label="Aba/Marca"
-              value={brandFilter}
-              onChange={(e) => setBrandFilter(e.target.value)}
-              options={brandOptions}
-            />
-            <SelectDark
-              label="Cidade"
-              value={cityFilter}
-              onChange={(e) => setCityFilter(e.target.value)}
-              options={cityOptions}
-            />
-            <div className="md:col-span-3">
-              <p className="text-xs text-white/70 mb-1">
-                Buscar por SKU/Descrição
-              </p>
+          {/* Toolbar: filtros + botões na mesma linha */}
+          <div className="flex flex-col md:flex-row md:items-end gap-2">
+            {/* Filtros */}
+            <div className="flex-1">
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
+                <SelectDark
+                  label="Aba/Marca"
+                  value={brandFilter}
+                  onChange={(e) => setBrandFilter(e.target.value)}
+                  options={brandOptions}
+                />
+                <SelectDark
+                  label="Cidade"
+                  value={cityFilter}
+                  onChange={(e) => setCityFilter(e.target.value)}
+                  options={cityOptions}
+                />
+<SelectDark
+                  label="Ciclo"
+                  value={selectedCycle}
+                  onChange={(e) => setSelectedCycle(e.target.value)}
+                  options={cycleOptions}
+                />
+                <div className="flex flex-col">
+                  <p className="text-xs mb-1 opacity-80">
+                    Buscar por SKU/Descrição
+                  </p>
 
-              <input
-                className="w-full rounded-lg border border-white/20 px-3 py-2 text-sm"
-                style={{ backgroundColor: "#0f172a", color: "#ffffff" }}
-                placeholder="buscar…"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-              />
+                  <input list="sku-sug-resumo"
+                    className="w-full h-10 rounded-lg border border-white/20 px-3 text-sm"
+                    style={{ backgroundColor: "#0f172a", color: "#ffffff" }}
+                    placeholder="buscar…"
+                    value={query}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      const sku = parseSkuFromLabel(v);
+                      if (v && (v.includes("—") || v.includes("-")) && sku) setQuery(sku);
+                      else setQuery(v);
+                    }}
+                  />
+                  <datalist id="sku-sug-resumo">
+                    {skuSuggestionsResumo.map((s) => (
+                      <option key={s} value={s} />
+                    ))}
+                  </datalist>
+                {promoSuggestionsView.length === 0 && (
+                  <div className="mt-3 text-sm text-white/70">
+                    Nenhum resultado para o filtro informado. Ajuste o texto de busca, a curva, ou limpe os filtros.
+                  </div>
+                )}
+
+                </div>
+              </div>
             </div>
-          </div>
 
-          {/* Botões */}
-          <div className="flex flex-wrap gap-2 mt-4">
-            <button
-              onClick={() => {
-                setBrandFilter("Todas");
-                setCityFilter("Todas");
-                setQuery("");
-                setSkuSel("Todos");
-                setSelectedCycle("Todos");
-                setSalesCityFilter("Todas");
-                setPlanCityFilter("Todas");
-                setPlanCurveFilter("Todas");
-                setPlanCategoryFilter("Todas");
-                setPlanDesativMode("todos");
-                setBuyDesativMode("excluir");
-              }}
-              className="rounded-lg px-3 py-2 text-sm font-medium"
-              style={{ background: "rgba(148,163,184,.5)" }}
-            >
-              Limpar filtros
-            </button>
-            <button
-              onClick={() => setShowDetail((v) => !v)}
-              className="rounded-lg px-3 py-2 text-sm font-medium"
-              style={{ background: C_PURPLE }}
-            >
-              {showDetail ? "Ocultar detalhe" : "Ver detalhe"}
-            </button>
-            <button
-              onClick={exportXlsx}
-              className="rounded-lg px-3 py-2 text-sm font-medium shadow"
-              style={{ background: C_BLUE }}
-            >
-              Exportar XLSX
-            </button>
+            {/* Botões */}
+            <div className="flex flex-wrap md:flex-nowrap gap-2 md:justify-end mt-2 md:mt-5">
+              <button
+                onClick={() => {
+                  setBrandFilter("Todas");
+                  setCityFilter("Todas");
+                  setQuery("");
+                  setSkuSel("Todos");
+                  setSelectedCycle("Todos");
+                  setSalesCityFilter("Todas");
+                  setPlanCityFilter("Todas");
+                  setPlanCurveFilter("Todas");
+                  setPlanCategoryFilter("Todas");
+                  setPlanDesativMode("todos");
+                  setBuyDesativMode("excluir");
+                }}
+                className="h-10 rounded-lg px-4 text-sm font-medium"
+                style={{ background: "rgba(148,163,184,.5)" }}
+                type="button"
+              >
+                Limpar filtros
+              </button>
+              <button
+                onClick={() => setShowDetail((v) => !v)}
+                className="h-10 rounded-lg px-4 text-sm font-medium"
+                style={{ background: C_PURPLE }}
+                type="button"
+              >
+                {showDetail ? "Ocultar detalhe" : "Ver detalhe"}
+              </button>
+              <button
+                onClick={exportXlsx}
+                className="h-10 rounded-lg px-4 text-sm font-medium shadow"
+                style={{ background: C_BLUE }}
+                type="button"
+              >
+                Exportar XLSX
+              </button>
+            </div>
           </div>
 
           {/* Erro */}
@@ -2840,7 +3150,7 @@ function exportMinimoXlsx() {
           ) : null}
 
           {/* KPIs */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-6">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-2 mt-6">
             <Kpi title="Estoque Atual" value={totEst} color={C_BLUE} />
             <Kpi title="Em Trânsito" value={totTrans} color={C_GREEN} />
             <Kpi
@@ -2883,10 +3193,10 @@ function exportMinimoXlsx() {
           {showDetail && (
             <div className="mt-6">
               <div
-                className="overflow-auto rounded-lg"
+                className="overflow-auto rounded-lg details-scroll"
                 style={{ border: `1px solid ${C_CARD_BORDER}` }}
               >
-                <table className="w-full text-sm">
+                <table className="w-full text-sm details-table">
                   <thead className="bg-white/5">
                     <tr>
                       {[
@@ -2957,70 +3267,96 @@ function exportMinimoXlsx() {
         <Card
           title="Análise de Vendas (últimos 17 ciclos)"
           borderColor="rgba(59,130,246,.35)"
-          right={
-            <div className="flex items-end gap-2 no-print">
-              <span
-                className="hidden sm:inline text-xs rounded-md px-2 py-1"
-                style={{
-                  background: "rgba(59,130,246,.15)",
-                  border: "1px solid rgba(59,130,246,.35)",
-                }}
-              >
-                Filtrando: <b>{skuSel}</b> · <b>{selectedCycle}</b> ·{" "}
-                <b>{brandFilter}</b> · <b>{salesCityFilter}</b>
-              </span>
-              <button
-                onClick={() => setShowCycleDetail((v) => !v)}
-                className="rounded-lg px-3 py-2 text-xs sm:text-sm font-medium shadow"
-                style={{ background: C_PURPLE }}
-              >
-                {showCycleDetail ? "Ocultar detalhe" : "Ver detalhe"}
-              </button>
-              <button
-                onClick={exportXlsx}
-                className="rounded-lg px-3 py-2 text-xs sm:text-sm font-medium shadow"
-                style={{ background: C_BLUE }}
-              >
-                Exportar XLSX
-              </button>
-            </div>
-          }
-        >
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
-            <div>
-              <p className="text-xs text-white/70 mb-1">SKU (Produto)</p>
-              <div className="space-y-1">
-                <input
-                  type="text"
-                  value={skuSearchVendas}
-                  onChange={(e) => setSkuSearchVendas(e.target.value)}
-                  placeholder="Digite código ou nome..."
-                  className="w-full rounded-lg border border-white/10 bg-[#0f172a] px-3 py-2 text-sm text-white"
-                  style={{ colorScheme: "dark" }}
-                />
-                <SelectDark
-                  label="Lista de SKUs"
-                  value={skuSel}
-                  onChange={(e) => setSkuSel(e.target.value)}
-                  options={skuOptionsFiltered}
-                />
-              </div>
-            </div>
-            <SelectDark
-              label="Ciclo (para detalhe)"
-              value={selectedCycle}
-              onChange={(e) => setSelectedCycle(e.target.value)}
-              options={cycleOptions}
-            />
-            <SelectDark
-              label="Loja (Cidade vendas)"
-              value={salesCityFilter}
-              onChange={(e) => setSalesCityFilter(e.target.value)}
-              options={SALES_CITY_OPTIONS}
-            />
-          </div>
+          >
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+          {/* Toolbar: filtros + botões (mesmo estilo do Resumo Total) */}
+                    <div className="flex items-end gap-2 overflow-x-auto pb-1 mb-2 no-print details-scroll">
+                      {/* Loja (Cidade vendas) */}
+                      <div className="min-w-[220px]">
+                        <SelectDark
+                          label="Loja (Cidade vendas)"
+                          value={salesCityFilter}
+                          onChange={(e) => setSalesCityFilter(e.target.value)}
+                          options={SALES_CITY_OPTIONS}
+                        />
+                      </div>
+
+                      {/* Ciclo (para detalhe) */}
+                      <div className="min-w-[220px]">
+                        <SelectDark
+                          label="Ciclo (para detalhe)"
+                          value={selectedCycle}
+                          onChange={(e) => setSelectedCycle(e.target.value)}
+                          options={cycleOptions}
+                        />
+                      </div>
+
+                      {/* Buscar por SKU/Descrição */}
+                      <div className="min-w-[340px] flex flex-col gap-1">
+                        <label className="text-xs text-white/70">Buscar por SKU/Descrição</label>
+                        <input list="sku-sug-vendas"
+                          className="h-10 w-full rounded-lg border border-white/10 bg-white/5 px-3 text-sm outline-none focus:ring-2 focus:ring-blue-500/40"
+                          placeholder="buscar..."
+                          value={skuSearchVendas}
+                          onChange={(e) => {
+                      const v = e.target.value;
+                      const sku = parseSkuFromLabel(v);
+                      const next = v && (v.includes("—") || v.includes("-")) && sku ? sku : v;
+                      setSkuSearchVendas(next);
+
+                      // Importante: a aba de vendas filtra usando skuSel (não o texto do input).
+                      // Então, quando houver um SKU válido (exato), sincronizamos skuSel.
+                      const candidate = String(parseSkuFromLabel(next) || next).trim();
+                      if (candidate && skuList && skuList.includes(candidate)) {
+                        setSkuSel(candidate);
+                      } else if (!candidate) {
+                        setSkuSel("Todos");
+                      }
+                    }}
+                        />
+                        <datalist id="sku-sug-vendas">
+                          {skuSuggestionsVendas.map((s) => (
+                            <option key={s} value={s} />
+                          ))}
+                        </datalist>
+                      </div>
+
+                      {/* Botões */}
+                      <div className="flex gap-2 shrink-0 self-end">
+                        <button
+                          onClick={() => {
+                            setSkuSearchVendas("");
+                            setSelectedCycle("Todos");
+                            setSalesCityFilter("Todas");
+                            setShowCycleDetail(false);
+                          }}
+                          className="h-10 rounded-lg px-4 text-xs sm:text-sm font-medium shadow"
+                          style={{ background: "rgba(148,163,184,.5)" }}
+                          type="button"
+                        >
+                          Limpar filtros
+                        </button>
+
+                        <button
+                          onClick={() => setShowCycleDetail((v) => !v)}
+                          className="h-10 rounded-lg px-4 text-xs sm:text-sm font-medium shadow"
+                          style={{ background: "rgba(139,92,246,.9)" }}
+                          type="button"
+                        >
+                          Ver detalhe
+                        </button>
+
+                        <button
+                          onClick={exportXlsx}
+                          className="h-10 rounded-lg px-4 text-xs sm:text-sm font-medium shadow"
+                          style={{ background: C_BLUE }}
+                          type="button"
+                        >
+                          Exportar XLSX
+                        </button>
+                      </div>
+                    </div>
+<div className="grid grid-cols-1 md:grid-cols-3 gap-2 mb-2">
             <Kpi
               title="Média (janela)"
               value={Number(media17 || 0).toLocaleString("pt-BR", {
@@ -3048,7 +3384,7 @@ function exportMinimoXlsx() {
               title="Resumo do Filtro"
               borderColor="rgba(124,58,237,.35)"
             >
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
                 <Kpi
                   title="Média por ciclo (filtro)"
                   value={resumoFiltro.mediaTexto}
@@ -3111,8 +3447,8 @@ function exportMinimoXlsx() {
               <h3 className="text-sm font-medium text-white/80 mb-2">
                 Ranking de SKUs por pico de vendas (últimos 17 ciclos)
               </h3>
-              <div className="overflow-auto max-h-72 rounded-xl border border-white/10 bg-black/20">
-                <table className="w-full text-xs">
+              <div className="overflow-auto max-h-72 rounded-xl border border-white/10 bg-black/20 details-scroll">
+                <table className="w-full text-xs details-table">
                   <thead>
                     <tr className="text-left border-b border-white/10">
                       <th className="px-3 py-2">#</th>
@@ -3168,151 +3504,135 @@ function exportMinimoXlsx() {
         <Card
           title="Sugestão de Estoque Mínimo (17 ciclos)"
           borderColor="rgba(34,197,94,.35)"
-          right={
-            <div className="flex flex-col items-end gap-2 no-print">
-              {/* Linha de filtros principais */}
-              <div className="flex items-center gap-2">
-                <SelectDark
-                  label="Método"
-                  value={minMethod}
-                  onChange={(e) => setMinMethod(e.target.value)}
-                  options={[
-                    { value: "media17", label: "Média 17 ciclos" },
-                    { value: "max17", label: "Máximo 17 ciclos" },
-                    { value: "p85", label: "Percentil 85" },
-                    { value: "media+1sigma", label: "Média + 1σ" },
-                  ]}
-                />
+        >
 
-                <SelectDark
-                  label="Fator de cobertura"
-                  value={covFactor}
-                  onChange={(e) => setCovFactor(e.target.value)}
-                  options={[
-                    { value: "0.5", label: "Cobertura 0,5 ciclo" },
-                    { value: "0.75", label: "Cobertura 0,75 ciclo" },
-                    { value: "1.0", label: "Cobertura 1 ciclo (padrão)" },
-                    { value: "1.25", label: "Cobertura 1,25 ciclo" },
-                    { value: "1.5", label: "Cobertura 1,5 ciclo" },
-                    { value: "2.0", label: "Cobertura 2 ciclos" },
-                  ]}
-                />
-
-                <button
-                  onClick={() => setShowMinDetail((v) => !v)}
-                  className="rounded-lg px-3 py-2 text-xs sm:text-sm font-medium shadow"
-                  style={{ background: C_PURPLE }}
-                >
-                  {showMinDetail ? "Ocultar detalhe" : "Ver detalhe"}
-                </button>
-              </div>
-
-              {/* Cenário rápido */}
-              {/* Filtros por Classe/Categoria/SKU/Cidade */}
-              <div className="flex flex-wrap items-center justify-end gap-2 mt-1">
-                <SelectDark
-                  label="Categoria"
-                  value={minCategoryFilter}
-                  onChange={(e) => setMinCategoryFilter(e.target.value)}
-                  options={planCategoryOptions}
-                  className="w-40"
-                />
-                <SelectDark
-                  label="Curva"
-                  value={minCurveFilter}
-                  onChange={(e) => setMinCurveFilter(e.target.value)}
-                  options={planCurveOptions}
-                  className="w-32"
-                />
-                <SelectDark
-                  label="Cidade"
-                  value={minCityFilter}
-                  onChange={(e) => setMinCityFilter(e.target.value)}
-                  options={cityOptions}
-                  className="w-40"
-                />
-                <div className="flex flex-col text-xs">
-                  <label className="text-white/60 mb-1">SKU</label>
-                  <input
+          {/* Toolbar (sem prop right, mais seguro) */}
+          <div className="no-print">
+              {/* 1 linha: Buscar SKU - Curva - Categoria - Cidade - Limpar Filtro - Ver detalhe - Exportar XLSX */}
+              <div className="flex items-end gap-2 flex-nowrap overflow-x-auto details-scroll">
+                <div className="flex flex-col w-[200px] shrink-0">
+                  <p className="text-xs mb-1 opacity-80">Buscar SKU</p>
+                  <input list="sku-sug-minimo"
                     type="text"
                     value={minSkuQuery}
-                    onChange={(e) => setMinSkuQuery(e.target.value)}
-                    className="bg-slate-900 border border-slate-600 rounded px-2 py-1 text-xs"
-                    placeholder="Filtrar SKU..."
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      const sku = parseSkuFromLabel(v);
+                      if (v && (v.includes("—") || v.includes("-")) && sku) setMinSkuQuery(sku);
+                      else setMinSkuQuery(v);
+                    }}
+                    placeholder="buscar..."
+                    className="h-10 w-full rounded-lg px-3 text-sm bg-slate-950/40 border border-slate-700/50 focus:outline-none focus:ring-2 focus:ring-emerald-500/40"
+                  />
+                  <datalist id="sku-sug-minimo">
+                    {minSkuSuggestions.map((s) => (
+                      <option key={s} value={s} />
+                    ))}
+                  </datalist>
+                </div>
+
+                <div className="w-[140px] shrink-0">
+                  <SelectDark
+                    label="Curva"
+                    value={minCurveFilter}
+                    onChange={(v) => setMinCurveFilter(v)}
+                    options={planCurveOptions}
                   />
                 </div>
-                <button
-                  type="button"
-                  onClick={exportMinimoXlsx}
-                  className="rounded-lg px-3 py-2 text-xs sm:text-sm font-medium shadow"
-                  style={{ background: C_BLUE }}
-                >
-                  Exportar XLSX
-                </button>
+
+                <div className="w-[220px] shrink-0">
+                  <SelectDark
+                    label="Categoria"
+                    value={minCategoryFilter}
+                    onChange={(v) => setMinCategoryFilter(v)}
+                    options={minCategoryOptions}
+                  />
+                </div>
+
+                <div className="w-[180px] shrink-0">
+                  <SelectDark
+                    label="Cidade"
+                    value={minCityFilter}
+                    onChange={(v) => setMinCityFilter(v)}
+                    options={minCityOptions}
+                  />
+                </div>
+
+                <div className="flex gap-2 shrink-0 ">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMinSkuQuery("");
+                      setMinCurveFilter("Todas");
+                      setMinCategoryFilter("Todas");
+                      setMinCityFilter("Todas");
+                    }}
+                    className="h-10 rounded-lg px-4 text-xs sm:text-sm font-medium shadow"
+                    style={{ background: "rgba(148,163,184,.5)" }}
+                  >
+                    Limpar filtro
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setShowMinDetail((v) => !v)}
+                    className="h-10 rounded-lg px-4 text-xs sm:text-sm font-medium shadow"
+                    style={{ background: C_PURPLE }}
+                  >
+                    Ver detalhe
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => exportToXlsx(sugestaoMinimoView, "sugestao_estoque_minimo")}
+                    className="h-10 rounded-lg px-4 text-xs sm:text-sm font-medium shadow"
+                    style={{ background: C_BLUE }}
+                  >
+                    Exportar XLSX
+                  </button>
+                </div>
               </div>
 
               {/* Cenário rápido */}
-              <div className="flex flex-wrap items-center justify-end gap-2 text-[11px] mt-1">
-                <span className="text-white/50 mr-1">Cenário rápido:</span>
-
-                {/* Conservador */}
+              <div className="mt-3 flex flex-wrap items-end gap-2">
+                <span className="text-xs opacity-80 mr-1">Cenário rápido</span>
                 <button
                   type="button"
-                  onClick={() => {
-                    // Conservador = mais estoque
-                    setMinMethod("max17");
-                    setCovFactor("1.5");
+                  onClick={() => setMinMethod("conservador")}
+                  className="h-8 rounded-full px-3 text-xs font-medium"
+                  style={{
+                    background: minMethod === "conservador" ? "rgba(34,197,94,.25)" : "rgba(148,163,184,.15)",
+                    border: "1px solid rgba(148,163,184,.25)",
                   }}
-                  className={`px-3 py-1.5 rounded-full border text-[11px] transition-colors
-                    ${
-                      minMethod === "max17" && covFactor === "1.5"
-                        ? "border-emerald-400 bg-emerald-500/20 text-emerald-100"
-                        : "border-white/15 bg-white/5 text-white/70 hover:bg-white/10"
-                    }`}
                 >
                   Conservador
                 </button>
-
-                {/* Neutro */}
                 <button
                   type="button"
-                  onClick={() => {
-                    // Neutro = padrão
-                    setMinMethod("media17");
-                    setCovFactor("1.0");
+                  onClick={() => setMinMethod("neutro")}
+                  className="h-8 rounded-full px-3 text-xs font-medium"
+                  style={{
+                    background: minMethod === "neutro" ? "rgba(34,197,94,.25)" : "rgba(148,163,184,.15)",
+                    border: "1px solid rgba(148,163,184,.25)",
                   }}
-                  className={`px-3 py-1.5 rounded-full border text-[11px] transition-colors
-                    ${
-                      minMethod === "media17" && covFactor === "1.0"
-                        ? "border-sky-400 bg-sky-500/20 text-sky-100"
-                        : "border-white/15 bg-white/5 text-white/70 hover:bg-white/10"
-                    }`}
                 >
                   Neutro
                 </button>
-
-                {/* Agressivo */}
                 <button
                   type="button"
-                  onClick={() => {
-                    // Agressivo = menos estoque, mais risco
-                    setMinMethod("p85");
-                    setCovFactor("0.75");
+                  onClick={() => setMinMethod("agressivo")}
+                  className="h-8 rounded-full px-3 text-xs font-medium"
+                  style={{
+                    background: minMethod === "agressivo" ? "rgba(34,197,94,.25)" : "rgba(148,163,184,.15)",
+                    border: "1px solid rgba(148,163,184,.25)",
                   }}
-                  className={`px-3 py-1.5 rounded-full border text-[11px] transition-colors
-                    ${
-                      minMethod === "p85" && covFactor === "0.75"
-                        ? "border-amber-400 bg-amber-500/20 text-amber-100"
-                        : "border-white/15 bg-white/5 text-white/70 hover:bg-white/10"
-                    }`}
                 >
                   Agressivo
                 </button>
               </div>
             </div>
-          }
-        >
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-2 mb-2">
             <Kpi
               title="Top 1 Estoque Mínimo"
               value={sugestaoMinimoView[0]?.EstoqueMinimoSugerido || 0}
@@ -3385,10 +3705,10 @@ function exportMinimoXlsx() {
 
           {showMinDetail && (
             <div
-              className="mt-6 overflow-auto rounded-lg"
+              className="mt-6 overflow-auto rounded-lg details-scroll"
               style={{ border: `1px solid ${C_CARD_BORDER}` }}
             >
-              <table className="w-full text-sm">
+              <table className="w-full text-sm details-table">
                 <thead className="bg-white/5">
                   <tr>
                     {[
@@ -3443,62 +3763,13 @@ function exportMinimoXlsx() {
       <div className="max-w-7xl mx-auto px-6 mt-10 mb-10 space-y-4">
         <Card borderColor="rgba(239,68,68,.35)">
           {/* Cabeçalho - Plano de Transferências & Compras */}
-          <div className="no-print mb-4">
-            <div className="flex items-center justify-between gap-3 mb-3">
-              <div className="flex-1" />
-              <h2 className="flex-1 text-lg font-semibold text-center">
-                Plano de Transferências &amp; Compras
-              </h2>
-              <div className="flex-1 flex justify-end gap-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setPlanCityFilter("Todas");
-                    setPlanCurveFilter("Todas");
-                    setPlanCategoryFilter("Todas");
-                    setPlanDays("21");
-                    setPlanDesativMode("todos");
-                    setBuyDesativMode("excluir");
-                  }}
-                  className="rounded-lg px-3 py-2 text-xs sm:text-sm font-medium shadow"
-                  style={{ background: "rgba(148,163,184,.5)" }}
-                >
-                  Limpar filtros
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setShowPlanDetail((v) => !v)}
-                  className="rounded-lg px-3 py-2 text-xs sm:text-sm font-medium shadow"
-                  style={{ background: C_PURPLE }}
-                >
-                  {showPlanDetail ? "Ocultar detalhe" : "Ver detalhe"}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setApplyTransfers((v) => !v)}
-                  className="rounded-lg px-3 py-2 text-xs sm:text-sm font-medium shadow border border-white/30"
-                  style={{
-                    background: applyTransfers
-                      ? "rgba(34,197,94,.4)"
-                      : "rgba(148,163,184,.4)",
-                  }}
-                >
-                  {applyTransfers
-                    ? "Aplicar transferências: SIM"
-                    : "Aplicar transferências: NÃO"}
-                </button>
-                <button
-                  type="button"
-                  onClick={exportPlanXlsx}
-                  className="rounded-lg px-3 py-2 text-xs sm:text-sm font-medium shadow"
-                  style={{ background: C_BLUE }}
-                >
-                  Exportar Plano XLSX
-                </button>
-              </div>
-            </div>
+          <div className="no-print mb-2">
+            <h2 className="text-sm font-semibold mb-2 text-left">
+              Plano de Transferências &amp; Compras
+            </h2>
 
-            <div className="flex flex-wrap items-center justify-center gap-2">
+            {/* Filtros (1 linha) */}
+            <div className="flex flex-nowrap items-end justify-start gap-2 overflow-x-auto pb-1 details-scroll">
               <SelectDark
                 label="Cidade (filtro plano)"
                 value={planCityFilter}
@@ -3521,42 +3792,6 @@ function exportMinimoXlsx() {
               />
 
               <SelectDark
-                label="Horizonte (dias)"
-                value={String(planDays)}
-                onChange={(e) => setPlanDays(e.target.value)}
-                options={[
-                  { value: "7", label: "7 dias" },
-                  { value: "14", label: "14 dias" },
-                  { value: "17", label: "17 dias" },
-                  { value: "21", label: "21 dias (padrão)" },
-                  { value: "30", label: "30 dias" },
-                  { value: "45", label: "45 dias" },
-                  { value: "60", label: "60 dias" },
-                  { value: "90", label: "90 dias" },
-                ]}
-                className="w-40"
-              />
-
-              <SelectDark
-                label="Desativação (filtro)"
-                value={planDesativMode}
-                onChange={(e) => setPlanDesativMode(e.target.value)}
-                options={[
-                  { value: "todos", label: "Todos os SKUs" },
-                  { value: "somente_ativos", label: "Somente ativos" },
-                  {
-                    value: "ate_ciclo_atual",
-                    label: `Só que desativam até C${CURRENT_CYCLE}`,
-                  },
-                  {
-                    value: "ate_prox_ciclo",
-                    label: `Até C${CURRENT_CYCLE + 1}`,
-                  },
-                ]}
-                className="w-44"
-              />
-
-              <SelectDark
                 label="Compras p/ desativados"
                 value={buyDesativMode}
                 onChange={(e) => setBuyDesativMode(e.target.value)}
@@ -3566,6 +3801,29 @@ function exportMinimoXlsx() {
                 ]}
                 className="w-40"
               />
+              <div className="min-w-[280px] flex flex-col gap-1">
+                <label className="text-xs text-white/70">Buscar por SKU/Descrição</label>
+                <input
+                  list="sku-sug-plano"
+                  className="h-10 w-full rounded-lg border border-white/10 bg-white/5 px-3 text-sm outline-none focus:ring-2 focus:ring-blue-500/40"
+                  placeholder="buscar..."
+                  value={planSkuQuery}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    const sku = parseSkuFromLabel(v);
+                    const next =
+                      v && (v.includes("—") || v.includes("-")) && sku ? sku : v;
+                    setPlanSkuQuery(next);
+                  }}
+                />
+                <datalist id="sku-sug-plano">
+                  {planSkuSuggestions.map((s) => (
+                    <option key={s} value={s} />
+                  ))}
+                </datalist>
+              </div>
+
+
 
               <button
                 onClick={() => setPlanTab("transfer")}
@@ -3579,13 +3837,33 @@ function exportMinimoXlsx() {
               <button
                 onClick={() => setPlanTab("compras")}
                 className={`rounded-lg px-3 py-2 text-xs sm:text-sm font-medium shadow ${
-                  planTab === "compras" ? "bg-emerald-500" : "bg-white/10"
+                  planTab === "compras" ? "bg-white/20" : "bg-white/10"
                 }`}
               >
                 Compras
               </button>
+            </div>
+
+            {/* Botões (abaixo dos filtros) */}
+            <div className="flex flex-wrap gap-2 mt-3">
+              <button
+                type="button"
+                onClick={() => {
+                  setPlanCityFilter("Todas");
+                  setPlanCurveFilter("Todas");
+                  setPlanCategoryFilter("Todas");
+                  setPlanDays("21");
+                  setPlanDesativMode("todos");
+                  setBuyDesativMode("excluir");
+                }}
+                className="rounded-lg px-3 py-2 text-xs sm:text-sm font-medium shadow"
+                style={{ background: "rgba(148,163,184,.5)" }}
+              >
+                Limpar filtros
+              </button>
 
               <button
+                type="button"
                 onClick={() => setShowPlanDetail((v) => !v)}
                 className="rounded-lg px-3 py-2 text-xs sm:text-sm font-medium shadow"
                 style={{ background: C_PURPLE }}
@@ -3594,16 +3872,30 @@ function exportMinimoXlsx() {
               </button>
 
               <button
+                type="button"
                 onClick={exportPlanXlsx}
                 className="rounded-lg px-3 py-2 text-xs sm:text-sm font-medium shadow"
-             >
-                Exportar Plano XLSX
+                style={{ background: C_BLUE }}
+              >
+                Exportar XLSX
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setApplyTransfers((v) => !v)}
+                className="rounded-lg px-3 py-2 text-xs sm:text-sm font-medium shadow border border-white/30"
+                style={{
+                  background: applyTransfers
+                    ? "rgba(34,197,94,.4)"
+                    : "rgba(148,163,184,.4)",
+                }}
+              >
+                Aplicar transferência
               </button>
             </div>
           </div>
-
-          {/* KPIs do plano (já respeitando filtro de cidade) */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+{/* KPIs do plano (já respeitando filtro de cidade) */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-2 mb-2">
             <Kpi
               title="Total a transferir (itens)"
               value={transfersView.reduce((s, t) => s + (t.Qtd || 0), 0)}
@@ -3621,7 +3913,7 @@ function exportMinimoXlsx() {
             />
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-2 mb-2">
             <Kpi
               title="Investimento com transferências (R$)"
               value={buysView
@@ -3658,7 +3950,7 @@ function exportMinimoXlsx() {
 
           {planTab === "transfer" ? (
             <>
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-2 mb-2">
                 <Card
                   title="Transferências por Cidade de Destino"
                   borderColor="rgba(34,197,94,.35)"
@@ -3749,10 +4041,10 @@ function exportMinimoXlsx() {
 
               {showPlanDetail && (
                 <div
-                  className="mt-6 overflow-auto rounded-lg"
+                  className="mt-6 overflow-auto rounded-lg details-scroll"
                   style={{ border: `1px solid ${C_CARD_BORDER}` }}
                 >
-                  <table className="w-full text-sm">
+                  <table className="w-full text-sm details-table">
                     <thead className="bg-white/5">
                       <tr>
                         {[
@@ -3793,7 +4085,7 @@ function exportMinimoXlsx() {
                               <td className="px-3 py-2">
                                 {skuClasse.get(r.SKU) || ""}
                               </td>
-                              <td className="px-3 py-2">
+<td className="px-3 py-2">
                                 {skuCategoria.get(r.SKU) || ""}
                               </td>
                               <td className="px-3 py-2">
@@ -3848,7 +4140,7 @@ function exportMinimoXlsx() {
             </>
           ) : (
             <>
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-2 mb-2">
                 <Card
                   title="Compras por Cidade (R$)"
                   borderColor="rgba(239,68,68,.35)"
@@ -3936,10 +4228,10 @@ function exportMinimoXlsx() {
                   borderColor="rgba(239,68,68,0.35)"
                 >
                   <div
-                    className="overflow-auto rounded-lg"
+                    className="overflow-auto rounded-lg details-scroll"
                     style={{ border: `1px solid ${C_CARD_BORDER}` }}
                   >
-                    <table className="w-full text-sm">
+                    <table className="w-full text-sm details-table">
                       <thead className="bg-white/5">
                         <tr>
                           {[
@@ -3998,22 +4290,25 @@ function exportMinimoXlsx() {
 
               {showPlanDetail && (
                 <div
-                  className="mt-6 overflow-auto rounded-lg"
+                  className="mt-6 overflow-auto rounded-lg details-scroll"
                   style={{ border: `1px solid ${C_CARD_BORDER}` }}
                 >
-                  <table className="w-full text-sm">
+                  <table className="w-full text-sm details-table">
                     <thead className="bg-white/5">
                       <tr>
                         {[
                           "SKU",
                           "Descrição",
                           "Classe",
+                          "Horizonte (dias)",
                           "Categoria",
                           "Desativação",
                           "Cidade",
                           "Vendas ciclo ant.",
                           "Vendas ciclo atual",
                           "Melhor momento",
+                          "Estoque atual (cidade)",
+                          "Estoque atual (total)",
                           "Compra intelig. prox ciclo",
                           "Qtd a comprar",
                           "Valor unitário",
@@ -4047,6 +4342,7 @@ function exportMinimoXlsx() {
                               <td className="px-3 py-2">
                                 {skuClasse.get(r.SKU) || ""}
                               </td>
+                              <td className="px-3 py-2 text-right">{r.HorizonteDias ?? ""}</td>
                               <td className="px-3 py-2">
                                 {skuCategoria.get(r.SKU) || ""}
                               </td>
@@ -4085,6 +4381,8 @@ function exportMinimoXlsx() {
                               <td className="px-3 py-2">
                                 {r.MelhorMomento || ""}
                               </td>
+                              <td className="px-3 py-2 text-right">{r.EstoqueAtualCidade ?? 0}</td>
+                              <td className="px-3 py-2 text-right">{r.EstoqueAtualTotal ?? 0}</td>
                               <td className="px-3 py-2 text-right">
                                 {r.CompraInteligenteProxCiclo ?? 0}
                               </td>
@@ -4131,22 +4429,22 @@ function exportMinimoXlsx() {
       {(activeSection === "promo") && (
         <>
       {/* SUGESTÃO DE COMPRA - SKUs EM PROMOÇÃO (PRÓXIMO CICLO) */}
-      {promoSuggestionsView.length > 0 && (
+      {
         <div className="max-w-7xl mx-auto px-6 mt-6 mb-10 space-y-4">
           <Card borderColor="rgba(34,197,94,.35)">
-            {/* Título + filtros no topo, igual plano */}
-            <div className="no-print mb-4 flex flex-col items-center justify-center text-center gap-2">
-              <div className="flex flex-col items-center justify-center text-center">
-                <h2 className="text-xl font-semibold">
+            {/* Título + filtros + botões (padrão Resumo Total) */}
+            <div className="no-print mb-2">
+              <div className="mb-2 text-left">
+                <h2 className="text-base font-semibold">
                   Sugestão de Compra – SKUs em Promoção (Próximo Ciclo C16)
                 </h2>
-
                 <p className="text-xs text-white/60 mt-1">
-                  Considerando promoções do próximo ciclo e consumo base
-                  estimado a partir do ciclo atual C15.
+                  Considerando promoções do próximo ciclo e consumo base estimado a partir do ciclo atual C15.
                 </p>
               </div>
-              <div className="flex flex-wrap items-end gap-2">
+            
+              {/* Toolbar: Filtros + Botões (mesma linha) */}
+              <div className="flex flex-nowrap items-end gap-2 overflow-x-auto details-scroll">
                 <SelectDark
                   label="Horizonte (dias)"
                   value={promoHorizonDays}
@@ -4154,7 +4452,6 @@ function exportMinimoXlsx() {
                   options={[
                     { value: "7", label: "7 dias" },
                     { value: "14", label: "14 dias" },
-                    { value: "17", label: "17 dias" },
                     { value: "21", label: "21 dias (padrão)" },
                     { value: "30", label: "30 dias" },
                     { value: "45", label: "45 dias" },
@@ -4163,7 +4460,7 @@ function exportMinimoXlsx() {
                   ]}
                   className="w-40"
                 />
-
+            
                 <SelectDark
                   label="Curva SKU"
                   value={promoCurveFilter}
@@ -4171,15 +4468,44 @@ function exportMinimoXlsx() {
                   options={promoCurveOptions}
                   className="w-32"
                 />
+            
+                <div className="w-56 flex flex-col">
+                  <p className="text-xs mb-1 opacity-80">SKU</p>
+                  <input
+                    list="sku-sug-promo"
+                    className="w-full h-10 rounded-lg border border-white/20 px-3 text-sm"
+                    style={{ backgroundColor: "#0f172a", color: "#ffffff" }}
+                    placeholder="digite SKU ou descrição…"
+                    value={promoSkuFilter}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      // Se o usuário selecionou do datalist (ex: "12345 — Descrição"),
+                      // guardamos só o SKU para o filtro funcionar.
+                      const sku = typeof parseSkuFromLabel === "function" ? parseSkuFromLabel(v) : v;
+                      if (v && (v.includes("—") || v.includes("-")) && sku) setPromoSkuFilter(sku);
+                      else setPromoSkuFilter(v);
+                    }}
+                  />
+                  <datalist id="sku-sug-promo">
+                    {promoSkuSuggestions.map((s) => (
+                      <option key={s} value={s} />
+                    ))}
+                  </datalist>
+                </div>
 
-                <SelectDark
-                  label="SKU"
-                  value={promoSkuFilter}
-                  onChange={(e) => setPromoSkuFilter(e.target.value)}
-                  options={promoSkuOptions}
-                  className="w-56"
-                />
-
+                <div className="flex gap-2 shrink-0 ">
+                  <button
+                  onClick={() => {
+                    setPromoHorizonDays("21");
+                    setPromoCurveFilter("Todas");
+                    setPromoSkuFilter("");
+                  }}
+                  className="rounded-lg px-3 py-2 text-xs sm:text-sm font-medium shadow"
+                  style={{ background: C_GRAY }}
+                >
+                  Limpar filtros
+                </button>
+            
                 <button
                   onClick={() => setShowPromoDetail((v) => !v)}
                   className="rounded-lg px-3 py-2 text-xs sm:text-sm font-medium shadow"
@@ -4187,7 +4513,7 @@ function exportMinimoXlsx() {
                 >
                   {showPromoDetail ? "Ocultar detalhe" : "Ver detalhe"}
                 </button>
-
+            
                 <button
                   onClick={exportPromoXlsx}
                   className="rounded-lg px-3 py-2 text-xs sm:text-sm font-medium shadow"
@@ -4195,11 +4521,12 @@ function exportMinimoXlsx() {
                 >
                   Exportar Promo XLSX
                 </button>
+                </div>
               </div>
             </div>
 
             {/* KPIs do card de promoção */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-2 mb-2">
               <Kpi
                 title="SKUs em promoção (com compra sugerida)"
                 value={promoTotalsView.totalSkus}
@@ -4222,7 +4549,7 @@ function exportMinimoXlsx() {
             </div>
 
             {/* KPIs adicionais (Top 1 / Top 5) */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-2 mb-2">
               <Kpi
                 title="Top 1 SKU (R$)"
                 value={promoResumoKpis.valorTop1.toLocaleString("pt-BR", {
@@ -4316,10 +4643,10 @@ function exportMinimoXlsx() {
             {/* Detalhe em tabela */}
             {showPromoDetail && (
               <div
-                className="mt-6 overflow-auto rounded-lg"
+                className="mt-6 overflow-auto rounded-lg details-scroll"
                 style={{ border: `1px solid ${C_CARD_BORDER}` }}
               >
-                <table className="w-full text-sm">
+                <table className="w-full text-sm details-table">
                   <thead className="bg-white/5">
                     <tr>
                       {[
@@ -4390,7 +4717,7 @@ function exportMinimoXlsx() {
             )}
           </Card>
         </div>
-      )}
+      }
 
       
         </>
@@ -4410,6 +4737,28 @@ function exportMinimoXlsx() {
           color: #fff;
           background-color: #0f172a;
         }
+
+        /* === Cabeçalho fixo nas tabelas de "Exibir detalhes" === */
+        .details-scroll {
+          position: relative;
+          max-height: 70vh;
+          overflow: auto;
+        }
+        table.details-table {
+          border-collapse: separate;
+          border-spacing: 0;
+        }
+        table.details-table thead th {
+          position: sticky;
+          top: 0;
+          z-index: 30;
+          background: #0f172a;
+          backdrop-filter: blur(6px);
+          box-shadow: 0 2px 10px rgba(0,0,0,.35);
+          border-bottom: 1px solid rgba(255,255,255,.10);
+        }
+
+
       `}</style>
     </div>
   );
