@@ -293,7 +293,16 @@ export default function DashboardPage() {
   const scaleTelao = useMemo(() => {
     const sw = vp.w / BASE_W;
     const sh = vp.h / BASE_H;
-    return Math.min(sw, sh);
+    return Math.max(sw, sh);
+
+  const offsetTelao = useMemo(() => {
+    const wScaled = BASE_W * scaleTelao;
+    const hScaled = BASE_H * scaleTelao;
+    return {
+      x: Math.max(0, (vp.w - wScaled) / 2),
+      y: Math.max(0, (vp.h - hScaled) / 2),
+    };
+  }, [vp.w, vp.h, scaleTelao]);
   }, [vp.w, vp.h]);
 
   const monthLabel = useMemo(() => {
@@ -309,9 +318,11 @@ export default function DashboardPage() {
   const [diaDe, setDiaDe] = useState<number>(1);
   const [diaAte, setDiaAte] = useState<number>(31);
 
+  const [diaTelaoAlterado, setDiaTelaoAlterado] = useState(false);
   // no modo telão, aplica range de dias no mesmo mês detectado (coluna M)
   useEffect(() => {
     if (!modoTelao) return;
+    if (!diaTelaoAlterado) return;
     const d =
       allRows.find((r) => r?.datafat instanceof Date && !isNaN(+r.datafat))?.datafat ||
       allRows.find((r) => r?.datadia instanceof Date && !isNaN(+r.datadia))?.datadia ||
@@ -330,7 +341,7 @@ export default function DashboardPage() {
     const iso = (dt: Date) => dt.toISOString().slice(0, 10);
     setFrom(iso(start));
     setTo(iso(end));
-  }, [modoTelao, diaDe, diaAte, allRows]);
+  }, [modoTelao, diaDe, diaAte, allRows, diaTelaoAlterado]);
 
 
   // 🔹 pega dados vindos da /area/upload (localStorage.conferenciaRows)
@@ -465,6 +476,7 @@ export default function DashboardPage() {
 
   const cities = safeArray(data?.filters?.cidades);
   const conferentes = safeArray(data?.filters?.conferentes);
+  const offsetTelaoSafe = (typeof offsetTelao !== 'undefined' ? offsetTelao : { x: 0, y: 0 });
 
   return (
     <main className={modoTelao ? "w-screen h-screen overflow-hidden p-3" : "max-w-7xl mx-auto p-4 md:p-6"}>
@@ -476,7 +488,7 @@ export default function DashboardPage() {
               style={{
                 width: BASE_W,
                 height: BASE_H,
-                transform: `scale(${scaleTelao})`,
+                transform: `translate(${(offsetTelaoSafe.x ?? 0)}px, ${(offsetTelaoSafe.y ?? 0)}px) scale(${scaleTelao})`,
                 transformOrigin: "top left",
               }}
             >
@@ -491,7 +503,7 @@ export default function DashboardPage() {
                   min={1}
                   max={31}
                   value={diaDe}
-                  onChange={(e) => setDiaDe(Number(e.target.value || 1))}
+                  onChange={(e) => { setDiaTelaoAlterado(true); setDiaDe(Number(e.target.value || 1)); }}
                   className="w-16 bg-white/10 border border-white/10 rounded px-2 py-1 text-white text-sm"
                 />
                 <span className="opacity-60 text-sm">a</span>
@@ -500,7 +512,7 @@ export default function DashboardPage() {
                   min={1}
                   max={31}
                   value={diaAte}
-                  onChange={(e) => setDiaAte(Number(e.target.value || 31))}
+                  onChange={(e) => { setDiaTelaoAlterado(true); setDiaAte(Number(e.target.value || 31)); }}
                   className="w-16 bg-white/10 border border-white/10 rounded px-2 py-1 text-white text-sm"
                 />
               </div>
@@ -555,7 +567,7 @@ export default function DashboardPage() {
                 <AnimatedChart title="Pedidos por Hora por Conferente" data={data?.charts?.pedidosHoraPorConferente ?? []} color="#a78bfa" dataKey="pedidos_hora" label="pedidos_hora" isMobile={false} modoTelao={true} />
               </div>
               <div className="min-h-0">
-                <AnimatedChart title="Pedidos por Cidade" data={data?.charts?.pedidosPorCidade ?? []} color="#f472b6" dataKey="pedidos" label="cidades" isMobile={false} modoTelao={true} />
+                <AnimatedChart title="Pedidos por Cidade" data={data?.charts?.pedidosPorCidade ?? []} color="#f472b6" dataKey="pedidos" label="Cidades" isMobile={false} modoTelao={true} />
               </div>
             </div>
           </div>
@@ -598,7 +610,7 @@ export default function DashboardPage() {
           </select>
 
           <button
-            onClick={() => setModoTelao((v) => !v)}
+            onClick={() => { setDiaTelaoAlterado(false); setModoTelao((v) => !v); }}
             className="h-[42px] rounded bg-white/10 border border-white/10 px-3 text-sm text-white hover:bg-white/15"
           >
             {modoTelao ? "Modo Normal" : "Modo Telão"}
@@ -805,7 +817,7 @@ function Chart({ data, color, dataKey, label, isMobile }: any) {
       >
         <CartesianGrid strokeDasharray="3 3" stroke="#333" />
         <XAxis
-          dataKey={dataKey === 'pedidos' && label === 'Cidades' ? 'cidade' : 'conferente'}
+          dataKey={dataKey === 'pedidos' && String(label).toLowerCase() === 'cidades' ? 'cidade' : 'conferente'}
           stroke="#ccc"
           interval={0}
           angle={isMobile ? 20 : 30}
