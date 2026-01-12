@@ -22,6 +22,7 @@ type Row = {
   conferente: string | null;
   cidade: string | null;
   datadia: Date | null;
+  datafat?: Date | null;
   datahora: Date | null;
   qtdpedidos: number;
   qtditens: number;
@@ -113,7 +114,7 @@ function extractCity(addr: any): string | null {
 }
 
 /* mesmas colunas do backend */
-const COL = { G: 6, J: 9, W: 22, AH: 33, AI: 34 } as const;
+const COL = { G: 6, J: 9, M: 12, W: 22, AH: 33, AI: 34 } as const;
 
 /* ====== PARSE XLSX NO CLIENT ====== */
 function parseWorkbookToRows(wb: XLSX.WorkBook): Row[] {
@@ -126,11 +127,13 @@ function parseWorkbookToRows(wb: XLSX.WorkBook): Row[] {
     const r = rows[i] || [];
     const conferente = normStr(r[COL.AH]);
     const dataCell = r[COL.AI];
+    const datafatCell = r[COL.M]; // coluna M (DataFaturamentoPedido)
     const cidadeAddr = r[COL.W];
     const qtdpedidos = r[COL.G] ?? 0;
     const qtditens = r[COL.J] ?? 0;
 
     const datahora = toDateFlexible(dataCell);
+    const datafat = toDateFlexible(datafatCell);
     const datadia = onlyDate(datahora);
 
     const row: Row = {
@@ -273,6 +276,62 @@ export default function DashboardPage() {
 
   const fileRef = useRef<HTMLInputElement | null>(null);
   const [isMobile, setIsMobile] = useState(false);
+  const [modoTelao, setModoTelao] = useState(false);
+
+  // Telão responsivo por escala (base 1920x1080)
+  const BASE_W = 1920;
+  const BASE_H = 1080;
+  const [vp, setVp] = useState({ w: 1920, h: 1080 });
+
+  useEffect(() => {
+    const onResize = () => setVp({ w: window.innerWidth, h: window.innerHeight });
+    onResize();
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  const scaleTelao = useMemo(() => {
+    const sw = vp.w / BASE_W;
+    const sh = vp.h / BASE_H;
+    return Math.min(sw, sh);
+  }, [vp.w, vp.h]);
+
+  const monthLabel = useMemo(() => {
+    const monthNames = ['janeiro','fevereiro','março','abril','maio','junho','julho','agosto','setembro','outubro','novembro','dezembro'];
+    const d =
+      allRows.find((r) => r?.datafat instanceof Date && !isNaN(+r.datafat))?.datafat ||
+      allRows.find((r) => r?.datadia instanceof Date && !isNaN(+r.datadia))?.datadia ||
+      null;
+    if (!d) return '';
+    return (monthNames[d.getMonth()] || '').toLowerCase();
+  }, [allRows]);
+
+  const [diaDe, setDiaDe] = useState<number>(1);
+  const [diaAte, setDiaAte] = useState<number>(31);
+
+  // no modo telão, aplica range de dias no mesmo mês detectado (coluna M)
+  useEffect(() => {
+    if (!modoTelao) return;
+    const d =
+      allRows.find((r) => r?.datafat instanceof Date && !isNaN(+r.datafat))?.datafat ||
+      allRows.find((r) => r?.datadia instanceof Date && !isNaN(+r.datadia))?.datadia ||
+      null;
+    if (!d) return;
+
+    const y = d.getFullYear();
+    const m = d.getMonth();
+    const dim = new Date(y, m + 1, 0).getDate();
+    const clamp = (v: number) => Math.max(1, Math.min(dim, v || 1));
+    const a = clamp(diaDe);
+    const b = clamp(diaAte);
+    const start = new Date(y, m, Math.min(a, b));
+    const end = new Date(y, m, Math.max(a, b));
+
+    const iso = (dt: Date) => dt.toISOString().slice(0, 10);
+    setFrom(iso(start));
+    setTo(iso(end));
+  }, [modoTelao, diaDe, diaAte, allRows]);
+
 
   // 🔹 pega dados vindos da /area/upload (localStorage.conferenciaRows)
   useEffect(() => {
@@ -408,7 +467,106 @@ export default function DashboardPage() {
   const conferentes = safeArray(data?.filters?.conferentes);
 
   return (
-    <main className="max-w-7xl mx-auto p-4 md:p-6">
+    <main className={modoTelao ? "w-screen h-screen overflow-hidden p-3" : "max-w-7xl mx-auto p-4 md:p-6"}>
+
+      <div className={modoTelao ? "h-screen overflow-hidden" : ""}>
+        {modoTelao && (
+          <div className="w-screen h-screen overflow-hidden">
+            <div
+              style={{
+                width: BASE_W,
+                height: BASE_H,
+                transform: `scale(${scaleTelao})`,
+                transformOrigin: "top left",
+              }}
+            >
+
+        {modoTelao && (
+          <div className="mt-2 grid grid-cols-12 gap-2 items-stretch">
+            <div className="col-span-3 rounded-xl border border-white/10 bg-white/5 p-2">
+              <div className="text-xs opacity-70 mb-1">Dia</div>
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  min={1}
+                  max={31}
+                  value={diaDe}
+                  onChange={(e) => setDiaDe(Number(e.target.value || 1))}
+                  className="w-16 bg-white/10 border border-white/10 rounded px-2 py-1 text-white text-sm"
+                />
+                <span className="opacity-60 text-sm">a</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={31}
+                  value={diaAte}
+                  onChange={(e) => setDiaAte(Number(e.target.value || 31))}
+                  className="w-16 bg-white/10 border border-white/10 rounded px-2 py-1 text-white text-sm"
+                />
+              </div>
+            </div>
+
+            <div className="col-span-5 rounded-xl border border-white/10 bg-white/5 p-2 flex items-center justify-center relative">
+              {/* TELAO_TOGGLE_BTN */}
+              <button
+                onClick={() => setModoTelao(false)}
+                className="absolute top-2 right-2 rounded bg-white/10 border border-white/10 px-3 py-1 text-xs text-white hover:bg-white/15"
+                title="Voltar para modo normal"
+              >
+                Modo Normal
+              </button>
+              <div className="text-5xl font-semibold tracking-wide" style={{ textTransform: "lowercase" }}>
+                {monthLabel || ""}
+              </div>
+              <div className="text-xs opacity-60 ml-3">Mês</div>
+            </div>
+
+            <div className="col-span-4 grid grid-cols-2 gap-2">
+              <InfoCard title="Total Pedidos" value={data?.totals?.totalPedidos ?? 0} color="#60a5fa" />
+              <InfoCard title="Total Itens" value={data?.totals?.totalItens ?? 0} color="#34d399" />
+              <InfoCard title="Jornada Total (h)" value={data?.totals?.jornadaTotal ?? 0} color="#fbbf24" />
+              <InfoCard title="Média Pedidos por Hora" value={data?.totals?.pedidosHoraGeral ?? 0} color="#a78bfa" />
+            </div>
+          </div>
+        )}
+
+        {/* TELÃO: GRID GRAFICOS 1920x1080 */}
+        {modoTelao && (
+          <div
+            className="mt-2 grid grid-rows-2 gap-2"
+            style={{ height: BASE_H - 210 }}
+          >
+            {/* Linha 1 */}
+            <div className="grid grid-cols-2 gap-2 min-h-0">
+              <div className="min-h-0">
+                <AnimatedChart title="Pedidos por Conferente" data={data?.charts?.pedidosPorConferente ?? []} color="#60a5fa" dataKey="pedidos" label="pedidos" isMobile={false} modoTelao={true} />
+              </div>
+              <div className="min-h-0">
+                <AnimatedChart title="Itens por Conferente" data={data?.charts?.itensPorConferente ?? []} color="#34d399" dataKey="itens" label="itens" isMobile={false} modoTelao={true} />
+              </div>
+            </div>
+
+            {/* Linha 2 */}
+            <div className="grid grid-cols-3 gap-2 min-h-0">
+              <div className="min-h-0">
+                <AnimatedChart title="Jornada de Horas por Conferente" data={data?.charts?.jornadaPorConferente ?? []} color="#fbbf24" dataKey="horas" label="horas" isMobile={false} modoTelao={true} />
+              </div>
+              <div className="min-h-0">
+                <AnimatedChart title="Pedidos por Hora por Conferente" data={data?.charts?.pedidosHoraPorConferente ?? []} color="#a78bfa" dataKey="pedidos_hora" label="pedidos_hora" isMobile={false} modoTelao={true} />
+              </div>
+              <div className="min-h-0">
+                <AnimatedChart title="Pedidos por Cidade" data={data?.charts?.pedidosPorCidade ?? []} color="#f472b6" dataKey="pedidos" label="cidades" isMobile={false} modoTelao={true} />
+              </div>
+            </div>
+          </div>
+        )}
+            </div>
+          </div>
+        )}
+
+
+        <div className="">
+
       {/* Cabeçalho */}
       <motion.div
         initial={{ opacity: 0, y: -10 }}
@@ -438,6 +596,13 @@ export default function DashboardPage() {
               </option>
             ))}
           </select>
+
+          <button
+            onClick={() => setModoTelao((v) => !v)}
+            className="h-[42px] rounded bg-white/10 border border-white/10 px-3 text-sm text-white hover:bg-white/15"
+          >
+            {modoTelao ? "Modo Normal" : "Modo Telão"}
+          </button>
 
           {/* Upload local (NÃO mexe no fluxo de estoque) */}
           <label className="flex items-center gap-2 px-3 md:px-4 py-2 rounded bg-emerald-500 hover:bg-emerald-600 transition font-semibold text-white text-sm md:text-base cursor-pointer">
@@ -476,6 +641,8 @@ export default function DashboardPage() {
       </motion.div>
 
       {/* Filtros */}
+      {!modoTelao && (
+      <>
       <motion.div
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
@@ -588,6 +755,13 @@ export default function DashboardPage() {
           </div>
         </>
       )}
+
+      </>
+      )}
+
+        </div>
+      </div>
+
     </main>
   );
 }
