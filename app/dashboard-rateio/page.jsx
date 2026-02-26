@@ -1,5 +1,9 @@
 "use client";
 
+<h1 className="text-2xl font-bold">
+  Dashboard Rateio (VERSÃO NOVA)
+</h1>
+
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
 import {
@@ -72,6 +76,7 @@ function fmtPct(p) {
 function TooltipRich({ active, payload, label, labelPrefix }) {
   if (!active || !payload || !payload.length) return null;
 
+  // Para Pizza/Bar: geralmente vem 1 item no payload
   const first = payload[0];
   const raw = first?.payload || {};
   const pctLabel = raw?.pctLabel || (typeof raw?.pct === "number" ? `${raw.pct.toFixed(1)}%` : null);
@@ -91,14 +96,17 @@ function TooltipRich({ active, payload, label, labelPrefix }) {
           const name = p.name ?? p.dataKey ?? "Valor";
           const color = p.color || p.stroke || p.fill || "#fff";
           const value = typeof p.value === "number" ? fmtBRL(p.value) : String(p.value ?? "");
+
+          // tenta puxar % do próprio item (pizza/bar)
           const r = p.payload || {};
           const pct = r?.pctLabel || (typeof r?.pct === "number" ? `${r.pct.toFixed(1)}%` : null);
+          const cum = r?.cumPctLabel || (typeof r?.cumPct === "number" ? `${r.cumPct.toFixed(1)}%` : null);
 
           return (
             <div key={i} className="flex items-center gap-2 text-sm">
               <span className="inline-block h-2.5 w-2.5 rounded-full" style={{ background: color }} />
               <span className="text-white/80 truncate max-w-[220px]">{String(name)}</span>
-              <span className="ml-auto font-semibold text-white">
+              <span className="ml-auto font-semibold" style={{ color }}>
                 {value}
               </span>
               {pct && <span className="text-white/60 text-xs w-[56px] text-right">{pct}</span>}
@@ -500,6 +508,7 @@ export default function DashboardRateioUploadInteligentePage() {
   const [outrosOpen, setOutrosOpen] = useState(false);
   const [cutoffPct, setCutoffPct] = useState(2.5);
 
+
   const handlePieClick = (data) => {
     const plano = data?.payload?.plano ?? data?.plano;
     if (!plano) return;
@@ -724,12 +733,13 @@ export default function DashboardRateioUploadInteligentePage() {
       });
     }
 
-    // adiciona % acumulado (ordem das fatias)
+    // adiciona % acumulado para tooltip (ordem das fatias)
     let run = 0;
     const out2 = out.map((d) => {
       run += d.pct || 0;
       return { ...d, cumPct: run, cumPctLabel: `${run.toFixed(1)}%` };
     });
+
     return out2;
   }, [byPlano, cutoffPct]);
 
@@ -762,9 +772,6 @@ const outrosPlanos = useMemo(() => {
     return byPlano.slice(max);
   }, [byPlano]);
 
-  // Top 20 dentro de “Outros” (gráfico com scroll)
-  const outrosTop20 = useMemo(() => outrosDetalhe.rows.slice(0, 20), [outrosDetalhe.rows]);
-  const outrosBarsH = useMemo(() => Math.max(520, outrosTop20.length * 34), [outrosTop20.length]);
 
   // ------------------------
   // Drill-down (clique na pizza)
@@ -934,11 +941,10 @@ const outrosPlanos = useMemo(() => {
                 value={fPlano}
                 onChange={(e) => setFPlano(e.target.value)}
                 className="w-full rounded-lg px-3 py-2 bg-white/5 border border-white/10 text-white outline-none focus:ring-2 focus:ring-sky-500/40"
-                style={{ colorScheme: "dark" }}
                 disabled={!rows.length}
               >
                 {planos.map((p) => (
-                  <option key={p} value={p} style={{ backgroundColor: "#0c1118", color: "#e5e7eb" }}>
+                  <option key={p} value={p} className="bg-[#0c1118]">
                     {p}
                   </option>
                 ))}
@@ -946,21 +952,6 @@ const outrosPlanos = useMemo(() => {
             </div>
 <div className="md:col-span-2">
               <div className="text-[11px] text-white/60 mb-1">Meses (Vencimento)</div>
-            <div className="mt-3 flex items-center gap-3 flex-wrap">
-              <div className="text-xs text-white/60 whitespace-nowrap">Corte p/ “Outros”</div>
-              <input
-                type="range"
-                min={0}
-                max={10}
-                step={0.5}
-                value={cutoffPct}
-                onChange={(e) => setCutoffPct(Number(e.target.value))}
-                className="w-52 accent-white"
-              />
-              <div className="text-xs text-white/80 w-12 text-right">{cutoffPct.toFixed(1)}%</div>
-              <div className="text-xs text-white/50">Agrupa planos com participação menor que o corte.</div>
-            </div>
-
               <div className="flex flex-wrap gap-2">
                 {MESES_LABEL.map((m, idx) => {
                   const active = mesesSel.includes(idx);
@@ -1005,23 +996,25 @@ const outrosPlanos = useMemo(() => {
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
           <Card title="Total Geral (após filtros)">
-            <div className="text-xl font-semibold" style={{ color: C_GREEN }}>
+            <div className="text-3xl font-bold" style={{ color: C_GREEN }}>
               {fmtBRL(totalGeral)}
             </div>
             <div className="text-[11px] text-white/60 mt-1">{rows.length ? "Base real carregada" : "Carregue um Excel para alimentar os gráficos"}</div>
             {rows.length && (
               <div className="text-[11px] text-white/50 mt-1">
+                Valor (min/max): {fmtBRL(debugValores.min)} / {fmtBRL(debugValores.max)} • Coluna: {debugValores.keys.join(", ") || "-"}
               </div>
 
             )}
             {rows.length && (
               <div className="text-[11px] text-white/50 mt-1">
+                Vencimentos lidos: {debugDatas.ok}/{debugDatas.total} • Ex.: {debugDatas.sample.join(", ") || "-"}
               </div>
             )}
           </Card>
 
           <Card title="Linhas / Itens">
-            <div className="text-xl font-semibold text-white/90">{filtered.length}</div>
+            <div className="text-3xl font-bold text-white/90">{filtered.length}</div>
             <div className="text-[11px] text-white/60 mt-1">Registros após filtros</div>
           </Card>
 
@@ -1065,12 +1058,12 @@ const outrosPlanos = useMemo(() => {
             <div className="text-[11px] text-white/60 mt-1">
               Clique em uma fatia para abrir o detalhamento do plano.
             </div>
-</Card>
+          </Card>
 
-          <Card title="Top Planos de Contas" style={{ height: 460 }}>
-            <div style={{ height: 380 }}>
+          <Card title="Top Planos de Contas" style={{ height: 420 }}>
+            <div style={{ height: 340 }}>
               {topPlanos.length ? (
-                <ResponsiveContainer width="100%" height="100%">
+                <ResponsiveContainer width="100%" height={340}>
                   <BarChart data={topPlanos}>
                     <CartesianGrid stroke="rgba(255,255,255,0.08)" strokeDasharray="3 3" />
                     <XAxis dataKey="plano" hide />
@@ -1158,72 +1151,60 @@ const outrosPlanos = useMemo(() => {
               </div>
             }
           >
-            <div className="flex flex-col gap-3 mb-3">
-              <div className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 inline-flex items-center gap-3">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
+              <div className="rounded-xl border border-white/10 bg-white/5 p-3">
                 <div className="text-[11px] text-white/60">Total “Outros”</div>
-                <div className="text-lg font-bold" style={{ color: C_GREEN }}>
+                <div className="text-xl font-bold" style={{ color: C_GREEN }}>
                   {fmtBRL(outrosDetalhe.total)}
                 </div>
               </div>
-
-              <div className="rounded-xl border border-white/10 bg-white/5 p-3 flex-1">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="text-[11px] text-white/60">Planos dentro de “Outros”</div>
-                  <div className="text-[11px] text-white/50">Top 20</div>
+              <div className="rounded-xl border border-white/10 bg-white/5 p-3 md:col-span-2">
+                <div className="text-[11px] text-white/60">
+                  Clique em um plano para abrir o drill (Plano → Empresa → Fornecedor)
                 </div>
+                <div className="mt-2 flex flex-wrap gap-2 max-h-24 overflow-auto">
+                  {outrosDetalhe.rows.slice(0, 24).map((d) => (
+                    <button
+                      key={d.plano}
+                      type="button"
+                      onClick={() => {
+                        setOutrosOpen(false);
+                        setDrillPlano(d.plano);
+                      }}
+                      className="px-2 py-1 rounded-lg text-xs border bg-white/5 border-white/10 text-white/80 hover:bg-white/10"
+                      title={d.plano}
+                    >
+                      {d.plano} • {d.pctLabel}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
 
-                <div className="mt-2 rounded-lg pr-1" style={{ maxHeight: 520, overflowY: "auto" }}>
-                  <div style={{ height: outrosBarsH, minHeight: 520 }}>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              <div className="rounded-xl border border-white/10 bg-white/5 p-3">
+                <div className="text-sm font-semibold text-white/90 mb-2">Top planos dentro de “Outros”</div>
+                <div style={{ height: 340 }}>
                   {outrosDetalhe.rows.length ? (
                     <ResponsiveContainer width="100%" height="100%">
-                      <BarChart
-                        data={outrosDetalhe.rows.slice(0, 20)}
-                        layout="vertical"
-                        margin={{ top: 0, right: 18, bottom: 0, left: 0 }}
-                      barCategoryGap={14}
-                        barGap={6}
-                      >
-                        <CartesianGrid stroke="rgba(255,255,255,0.08)" strokeDasharray="3 3" />
-                        <XAxis type="number" hide />
-                        <YAxis
-                          type="category"
-                          dataKey="plano"
-                          width={190}
-                          tick={{ fill: "rgba(255,255,255,0.65)", fontSize: 12 }}
-                        />
+                      <BarChart data={outrosDetalhe.rows.slice(0, 15)} layout="vertical" margin={{ left: 24, right: 24 }}>
+                        <CartesianGrid strokeDasharray="3 3" />
+                        <XAxis type="number" />
+                        <YAxis type="category" dataKey="plano" width={160} />
                         <Tooltip content={<TooltipRich labelPrefix="Plano" />} />
-                        <Bar
-                          dataKey="valor"
-                          fill={C_BLUE}
-                          barSize={24}
-                          radius={[0, 10, 10, 0]}
-                          onClick={(d) => {
-                            const plano = d?.payload?.plano ?? d?.plano;
-                            if (!plano) return;
-                            setOutrosOpen(false);
-                            setDrillPlano(plano);
-                          }}
-                        >
-                          <LabelList
-                            dataKey="pctLabel"
-                            position="right"
-                            fill="rgba(255,255,255,0.72)"
-                            fontSize={11}
-                          />
+                        <Bar dataKey="valor" radius={[8, 8, 8, 8]}>
+                          <LabelList dataKey="pctLabel" position="right" />
                         </Bar>
                       </BarChart>
                     </ResponsiveContainer>
                   ) : (
                     <div className="h-full grid place-items-center text-white/60 text-sm">Sem dados.</div>
                   )}
-                  </div>
                 </div>
-
-                <div className="text-[11px] text-white/55 mt-2">Clique em uma barra para abrir o drill do plano.</div>
               </div>
-            </div>
-            <div className="rounded-xl border border-white/10 bg-white/5 p-3">
-              <div className="text-sm font-semibold text-white/90 mb-2">Lista completa</div>
+
+              <div className="rounded-xl border border-white/10 bg-white/5 p-3">
+                <div className="text-sm font-semibold text-white/90 mb-2">Lista completa</div>
                 <div className="max-h-[360px] overflow-auto rounded-lg border border-white/10">
                   {outrosDetalhe.rows.map((d, i) => (
                     <button
@@ -1243,6 +1224,7 @@ const outrosPlanos = useMemo(() => {
                   ))}
                 </div>
               </div>
+            </div>
           </Card>
         )}
 
@@ -1394,7 +1376,7 @@ const outrosPlanos = useMemo(() => {
         {/* MODAL DETALHE (clique nos gráficos de barras do drill) */}
         {detailOpen && (
           <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm">
-            <div className="max-w-6xl mx-auto p-4 md:p-4">
+            <div className="max-w-6xl mx-auto p-4 md:p-6">
               <div
                 className="rounded-2xl p-4 md:p-5 shadow-xl"
                 style={{ border: `1px solid ${C_CARD_BORDER}`, background: "rgba(12,17,24,0.98)" }}
