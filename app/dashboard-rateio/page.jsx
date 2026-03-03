@@ -1,14 +1,11 @@
 "use client";
 
-<h1 className="text-2xl font-bold">
-  Dashboard Rateio (VERSÃO NOVA)
-</h1>
-
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
 import {
   ResponsiveContainer,
   BarChart,
+  ComposedChart,
   Bar,
   XAxis,
   YAxis,
@@ -19,6 +16,7 @@ import {
   Cell,
   LineChart,
   Line,
+  Area,
   LabelList
 } from "recharts";
 
@@ -76,7 +74,6 @@ function fmtPct(p) {
 function TooltipRich({ active, payload, label, labelPrefix }) {
   if (!active || !payload || !payload.length) return null;
 
-  // Para Pizza/Bar: geralmente vem 1 item no payload
   const first = payload[0];
   const raw = first?.payload || {};
   const pctLabel = raw?.pctLabel || (typeof raw?.pct === "number" ? `${raw.pct.toFixed(1)}%` : null);
@@ -96,17 +93,16 @@ function TooltipRich({ active, payload, label, labelPrefix }) {
           const name = p.name ?? p.dataKey ?? "Valor";
           const color = p.color || p.stroke || p.fill || "#fff";
           const value = typeof p.value === "number" ? fmtBRL(p.value) : String(p.value ?? "");
-
-          // tenta puxar % do próprio item (pizza/bar)
           const r = p.payload || {};
-          const pct = r?.pctLabel || (typeof r?.pct === "number" ? `${r.pct.toFixed(1)}%` : null);
-          const cum = r?.cumPctLabel || (typeof r?.cumPct === "number" ? `${r.cumPct.toFixed(1)}%` : null);
+          const pctRaw = r?.pctLabel || (typeof r?.pct === "number" ? `${r.pct.toFixed(1)}%` : null);
+          const showPct = (p.dataKey === "valor" || p.name === "Real");
+          const pct = showPct ? pctRaw : null;
 
           return (
             <div key={i} className="flex items-center gap-2 text-sm">
               <span className="inline-block h-2.5 w-2.5 rounded-full" style={{ background: color }} />
               <span className="text-white/80 truncate max-w-[220px]">{String(name)}</span>
-              <span className="ml-auto font-semibold" style={{ color }}>
+              <span className="ml-auto font-semibold text-white">
                 {value}
               </span>
               {pct && <span className="text-white/60 text-xs w-[56px] text-right">{pct}</span>}
@@ -127,6 +123,30 @@ function TooltipRich({ active, payload, label, labelPrefix }) {
               Acum.: <span className="text-white/80">{cumPctLabel}</span>
             </div>
           )}
+        </div>
+      )}
+
+
+      {typeof raw?.budget === "number" && raw.budget > 0 && typeof raw?.valor === "number" && (
+        <div className="mt-2 pt-2 border-t border-white/10 text-xs text-white/70">
+          <div className="flex items-center gap-2">
+            <span className="text-white/60">Previsto:</span>
+            <span className="text-white/85 font-medium">{fmtBRL(raw.budget)}</span>
+            <span className="ml-auto text-white/60">Dif.:</span>
+            <span className={`font-medium ${raw.valor > raw.budget ? "text-rose-200" : "text-emerald-200"}`}>{fmtBRL(raw.valor - raw.budget)}</span>
+          </div>
+          {(() => {
+            const ratio = raw.valor / raw.budget;
+            const label = raw.valor > raw.budget ? "Estourado" : ratio >= 0.9 ? "Atenção" : "Dentro";
+            const cls = raw.valor > raw.budget ? "border-rose-400/30 bg-rose-500/20 text-rose-200" : ratio >= 0.9 ? "border-amber-400/30 bg-amber-500/20 text-amber-200" : "border-emerald-400/30 bg-emerald-500/20 text-emerald-200";
+            return (
+              <div className="mt-2 flex items-center gap-2">
+                <span className={`px-2 py-0.5 rounded-lg border ${cls}`}>{label}</span>
+                <span className="text-white/50">Execução:</span>
+                <span className="text-white/80 font-medium">{(ratio * 100).toFixed(1)}%</span>
+              </div>
+            );
+          })()}
         </div>
       )}
     </div>
@@ -509,6 +529,47 @@ export default function DashboardRateioUploadInteligentePage() {
   const [cutoffPct, setCutoffPct] = useState(2.5);
 
 
+  // ------------------------
+  // Orçamentos (Previsto) por Plano — LocalStorage
+  // ------------------------
+  const BUDGET_LS_KEY = "bi_service_rateio_budgets_v1";
+  const [budgetOpen, setBudgetOpen] = useState(false);
+  const [budgetQuery, setBudgetQuery] = useState("");
+  const [budgets, setBudgets] = useState({}); // { [plano]: { value?: number, pct?: number, mode?: "value"|"pct" } }
+  // UI state (permite digitar vírgula/ponto sem o input "pular")
+  const [budgetUi, setBudgetUi] = useState({}); 
+  const budgetsSeededRef = useRef(false);
+// { [plano]: { value?: string, pct?: string } }
+
+
+const parseNumberInput = (val) => {
+  // aceita "1234,56" ou "1.234,56" ou "1234.56"
+  const s = String(val ?? "").trim();
+  if (!s) return NaN;
+  const normalized = s.replace(/\./g, "").replace(/,/g, ".");
+  const n = Number(normalized);
+  return Number.isFinite(n) ? n : NaN;
+};
+
+const round2 = (n) => (Number.isFinite(n) ? Math.round(n * 100) / 100 : n);
+
+const fmtBRNumber = (n) =>
+  Number.isFinite(n)
+    ? n.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+    : "";
+
+const fmtPctNumber = (n) =>
+  Number.isFinite(n)
+    ? n.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+    : "";
+
+const sanitizeNumericText = (s) => {
+  // mantém dígitos e separadores; o parseNumberInput já normaliza.
+  return String(s ?? "").replace(/[^0-9.,-]/g, "");
+};
+
+
+
   const handlePieClick = (data) => {
     const plano = data?.payload?.plano ?? data?.plano;
     if (!plano) return;
@@ -532,6 +593,11 @@ export default function DashboardRateioUploadInteligentePage() {
   const [detailRows, setDetailRows] = useState([]);
   const [detailQuery, setDetailQuery] = useState("");
 
+  // Modal: lista de planos por status (Dentro / Atenção / Estourado / Sem)
+  const [statusModalOpen, setStatusModalOpen] = useState(false);
+  const [statusModalKey, setStatusModalKey] = useState("over");
+  const [statusModalQuery, setStatusModalQuery] = useState("");
+
   useEffect(() => {
     try {
       const raw = localStorage.getItem(LS_KEY);
@@ -541,6 +607,42 @@ export default function DashboardRateioUploadInteligentePage() {
       if (parsed?.meta) setFileMeta(parsed.meta);
     } catch {}
   }, []);
+
+  // Carrega orçamentos do LocalStorage (com migração retrocompatível)
+useEffect(() => {
+  try {
+    const raw = localStorage.getItem(BUDGET_LS_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return;
+
+    // formato antigo: { [plano]: number }
+    const migrated = {};
+    for (const [k, v] of Object.entries(parsed)) {
+      if (typeof v === "number") {
+        migrated[k] = { value: v, mode: "value" };
+      } else if (v && typeof v === "object") {
+        const val = typeof v.value === "number" ? v.value : undefined;
+        const pct = typeof v.pct === "number" ? v.pct : undefined;
+        migrated[k] = { ...(val != null ? { value: val } : {}), ...(pct != null ? { pct } : {}), mode: v.mode === "pct" ? "pct" : "value" };
+      }
+    }
+    setBudgets(migrated);
+  } catch (e) {
+    // ignore
+  }
+}, []);
+
+
+  // Persiste orçamentos
+  useEffect(() => {
+    try {
+      localStorage.setItem(BUDGET_LS_KEY, JSON.stringify(budgets || {}));
+    } catch (e) {
+      // ignore
+    }
+  }, [budgets]);
+
 
   useEffect(() => {
     try {
@@ -602,6 +704,79 @@ export default function DashboardRateioUploadInteligentePage() {
 
   const planos = useMemo(() => ["Todos", ...Array.from(new Set(rows.map((r) => r.plano))).sort()], [rows]);
 
+  const planosSomente = useMemo(() => planos.filter((p) => p !== "Todos"), [planos]);
+
+  const budgetList = useMemo(() => {
+    const q = String(budgetQuery || "").trim().toLowerCase();
+    const base = planosSomente;
+    if (!q) return base;
+    return base.filter((p) => String(p).toLowerCase().includes(q));
+  }, [planosSomente, budgetQuery]);
+
+  const setBudgetValue = (plano, rawValue) => {
+    const n0 = parseNumberInput(rawValue);
+    const n = round2(n0);
+    setBudgets((prev) => {
+      const next = { ...(prev || {}) };
+      if (!Number.isFinite(n) || n <= 0) {
+        // se apagar valor e não tiver % salvo, remove
+        const keepPct = next?.[plano]?.pct;
+        if (typeof keepPct === "number" && Number.isFinite(keepPct) && keepPct > 0) {
+          next[plano] = { pct: round2(keepPct), mode: "pct" };
+        } else {
+          delete next[plano];
+        }
+      } else {
+        const pct0 = totalGeral > 0 ? (n / totalBaseAll) * 100 : next?.[plano]?.pct;
+        const pct = round2(pct0);
+        next[plano] = { value: n, ...(Number.isFinite(pct) ? { pct } : {}), mode: "value" };
+      }
+      return next;
+    });
+  };
+
+  const setBudgetPct = (plano, rawPct) => {
+    const p0 = parseNumberInput(rawPct);
+    const p = round2(p0);
+    setBudgets((prev) => {
+      const next = { ...(prev || {}) };
+      if (!Number.isFinite(p) || p <= 0) {
+        const keepVal = next?.[plano]?.value;
+        if (typeof keepVal === "number" && Number.isFinite(keepVal) && keepVal > 0) {
+          next[plano] = { value: round2(keepVal), mode: "value" };
+        } else {
+          delete next[plano];
+        }
+      } else {
+        const value0 = totalGeral > 0 ? (totalBaseAll * p) / 100 : next?.[plano]?.value;
+        const value = round2(value0);
+        next[plano] = { pct: p, ...(Number.isFinite(value) ? { value } : {}), mode: "pct" };
+      }
+      return next;
+    });
+  };
+
+const clearBudget = (plano) => {
+  setBudgets((prev) => {
+    const next = { ...(prev || {}) };
+    delete next[plano];
+    return next;
+  });
+  setBudgetUi((prev) => {
+    const next = { ...(prev || {}) };
+    delete next[plano];
+    return next;
+  });
+};
+
+const clearAllBudgets = () => {
+  setBudgets({});
+  setBudgetUi({});
+};
+
+
+
+
   const filtered = useMemo(() => {
     const q = busca.trim().toLowerCase();
 
@@ -643,6 +818,224 @@ export default function DashboardRateioUploadInteligentePage() {
 
   const totalGeral = useMemo(() => filtered.reduce((acc, r) => acc + (r.valor || 0), 0), [filtered]);
 
+  const totalBaseAll = useMemo(() => rows.reduce((acc, r) => acc + (r.valor || 0), 0), [rows]);
+
+  // ------------------------
+  // Orçamento (Previsto) — helpers e resumo
+  // ------------------------
+  const budgetValueForPlano = (plano) => {
+    const key = String(plano ?? "");
+    const b = budgets?.[key];
+    if (!b) return 0;
+    const v = Number(b.value ?? 0) || 0;
+    const p = Number(b.pct ?? 0) || 0;
+    const mode = b.mode;
+    if (mode === "pct" || (mode !== "value" && p > 0)) {
+      return (totalGeral * p) / 100;
+    }
+    return v;
+  };
+
+  const budgetValueForPlanoMes = (plano, totalMes, mesesCount) => {
+    const key = String(plano ?? "");
+    const b = budgets?.[key];
+    if (!b) return 0;
+    const v = Number(b.value ?? 0) || 0;
+    const p = Number(b.pct ?? 0) || 0;
+    const mode = b.mode;
+    if (mode === "pct" || (mode !== "value" && p > 0)) {
+      return (totalMes * p) / 100;
+    }
+    // Quando o orçamento é em R$ (value), tratamos como TOTAL do período selecionado.
+    // Para exibir uma "linha mensal" (ou comparar mês a mês), distribuímos igualmente entre os meses do período.
+    const n = Number(mesesCount ?? 0) || 0;
+    return n > 0 ? v / n : v;
+  };
+
+  const budgetStatus = (real, previsto) => {
+    const r = Number(real ?? 0) || 0;
+    const p = Number(previsto ?? 0) || 0;
+    if (!p) return { key: "none", label: "Sem orçamento", cls: "bg-white/10 text-white/70 border-white/15" };
+    const ratio = r / p;
+    if (r > p) return { key: "over", label: "Estourado", cls: "bg-rose-500/20 text-rose-200 border-rose-400/30" };
+    if (ratio >= 0.9) return { key: "warn", label: "Atenção", cls: "bg-amber-500/20 text-amber-200 border-amber-400/30" };
+    return { key: "ok", label: "Dentro", cls: "bg-emerald-500/20 text-emerald-200 border-emerald-400/30" };
+  };
+
+  // ------------------------
+  // Status visual por plano (considera meses + busca, mas IGNORA o filtro de plano)
+  // - Previsto em R$ é tratado como mensal (multiplica pela quantidade de meses do período)
+  // - Previsto em % é aplicado sobre o total de cada mês
+  // ------------------------
+  const rowsPeriodo = useMemo(() => {
+    const q = busca.trim().toLowerCase();
+    return rows.filter((r) => {
+      const matchBusca =
+        !q ||
+        r.plano.toLowerCase().includes(q) ||
+        r.conta.toLowerCase().includes(q) ||
+        r.fornecedor.toLowerCase().includes(q) ||
+        r.empresa.toLowerCase().includes(q) ||
+        r.status.toLowerCase().includes(q);
+
+      let matchMes = true;
+      if (mesesSel.length > 0) {
+        const mi = mesIndexFromISO(r.data);
+        matchMes = mesesSel.includes(mi);
+      }
+
+      return matchBusca && matchMes;
+    });
+  }, [rows, busca, mesesSel]);
+
+  const periodoMesTotals = useMemo(() => {
+    const m = new Map();
+    for (const r of rowsPeriodo) {
+      const k = monthKey(r.data);
+      if (!k) continue;
+      m.set(k, (m.get(k) ?? 0) + (r.valor || 0));
+    }
+    return m; // Map<mesKey, totalMes>
+  }, [rowsPeriodo]);
+
+  const periodoRealByPlano = useMemo(() => {
+    const m = new Map();
+    for (const r of rowsPeriodo) {
+      const k = String(r.plano ?? "");
+      if (!k) continue;
+      m.set(k, (m.get(k) ?? 0) + (r.valor || 0));
+    }
+    return m; // Map<plano, realPeriodo>
+  }, [rowsPeriodo]);
+
+  const planoStatusMap = useMemo(() => {
+    const out = {};
+    const meses = Array.from(periodoMesTotals.keys());
+    for (const plano of planosSomente) {
+      const real = periodoRealByPlano.get(plano) ?? 0;
+      let previsto = 0;
+      for (const mes of meses) {
+        const totalMes = periodoMesTotals.get(mes) ?? 0;
+        previsto += budgetValueForPlanoMes(plano, totalMes, meses.length);
+      }
+      const st = budgetStatus(real, previsto);
+      const emoji = st.key === "ok" ? "🟢" : st.key === "warn" ? "🟡" : st.key === "over" ? "🔴" : "⚪";
+      out[plano] = { ...st, emoji, real, previsto, ratio: previsto ? real / previsto : 0 };
+    }
+    return out; // { [plano]: {key,label,cls,emoji,real,previsto,ratio} }
+  }, [planosSomente, periodoMesTotals, periodoRealByPlano, budgets, totalBaseAll]);
+
+
+  const contasNoFiltro = useMemo(() => {
+    // IMPORTANTE: orçamento é por PLANO (plano de conta). Não usar r.conta aqui,
+    // porque em alguns contextos r.conta pode ser "Plano — Empresa — Fornecedor" e não bate com o cadastro.
+    const s = new Set();
+    for (const r of filtered) s.add(String(r.plano ?? ""));
+    return Array.from(s).filter(Boolean);
+  }, [filtered]);
+
+
+  const previstoTotal = useMemo(() => {
+    return contasNoFiltro.reduce((acc, c) => acc + budgetValueForPlano(c), 0);
+  }, [contasNoFiltro, budgets, totalGeral]);
+
+  const execPct = useMemo(() => (previstoTotal ? (totalGeral / previstoTotal) * 100 : 0), [totalGeral, previstoTotal]);
+  const diffBudget = useMemo(() => totalGeral - previstoTotal, [totalGeral, previstoTotal]);
+
+  const statusCounts = useMemo(() => {
+    const realMap = new Map();
+    for (const r of filtered) {
+      const k = String(r.plano ?? "");
+      realMap.set(k, (realMap.get(k) ?? 0) + (r.valor || 0));
+    }
+    const counts = { ok: 0, warn: 0, over: 0, none: 0 };
+    for (const k of contasNoFiltro) {
+      const real = realMap.get(k) ?? 0;
+      const prev = budgetValueForPlano(k);
+      const st = budgetStatus(real, prev).key;
+      counts[st] = (counts[st] ?? 0) + 1;
+    }
+    return counts;
+  }, [filtered, contasNoFiltro, budgets, totalGeral]);
+
+  const statusPlanos = useMemo(() => {
+    // Gera lista de planos com Real/Previsto/Execução e Status, respeitando filtros atuais
+    const realMap = new Map();
+    for (const r of filtered) {
+      const k = String(r.plano ?? "");
+      realMap.set(k, (realMap.get(k) ?? 0) + (r.valor || 0));
+    }
+
+    const arr = [];
+    for (const plano of contasNoFiltro) {
+      const real = realMap.get(plano) ?? 0;
+      const previsto = budgetValueForPlano(plano);
+      const st = budgetStatus(real, previsto); // { key, label, emoji, className }
+      arr.push({
+        plano,
+        real,
+        previsto,
+        execPct: previsto ? (real / previsto) * 100 : 0,
+        statusKey: st.key,
+        statusLabel: st.label,
+        statusEmoji: st.emoji,
+      });
+    }
+
+    // Ordena: estourado/warn/ok/none e depois por maior execução/real
+    const rank = { over: 0, warn: 1, ok: 2, none: 3 };
+    arr.sort((a, b) => {
+      const ra = rank[a.statusKey] ?? 9;
+      const rb = rank[b.statusKey] ?? 9;
+      if (ra !== rb) return ra - rb;
+      // prioriza maior % de execução e depois maior real
+      const ea = Number.isFinite(a.execPct) ? a.execPct : 0;
+      const eb = Number.isFinite(b.execPct) ? b.execPct : 0;
+      if (eb !== ea) return eb - ea;
+      return (b.real || 0) - (a.real || 0);
+    });
+
+    return arr;
+  }, [filtered, contasNoFiltro, budgets, totalGeral]);
+
+  const statusPlanosFiltered = useMemo(() => {
+    const q = (statusModalQuery || "").trim().toLowerCase();
+    return statusPlanos.filter((p) => {
+      if (p.statusKey !== statusModalKey) return false;
+      if (!q) return true;
+      return String(p.plano || "").toLowerCase().includes(q);
+    });
+  }, [statusPlanos, statusModalKey, statusModalQuery]);
+
+  // Quando o total muda, recalcula o outro campo automaticamente
+  useEffect(() => {
+    if (!Number.isFinite(totalBaseAll) || totalBaseAll <= 0) return;
+    setBudgets((prev) => {
+      const src = prev || {};
+      let changed = false;
+      const next = { ...src };
+      for (const [plano, b] of Object.entries(src)) {
+        if (!b) continue;
+        if (b.mode === "pct" && Number.isFinite(b.pct)) {
+          const value = round2((totalBaseAll * b.pct) / 100);
+          if (!Number.isFinite(b.value) || Math.abs((b.value ?? 0) - value) > 0.009) {
+            next[plano] = { ...b, value };
+            changed = true;
+          }
+        }
+        if (b.mode === "value" && Number.isFinite(b.value)) {
+          const pct = round2((b.value / totalBaseAll) * 100);
+          if (!Number.isFinite(b.pct) || Math.abs((b.pct ?? 0) - pct) > 0.009) {
+            next[plano] = { ...b, pct };
+            changed = true;
+          }
+        }
+      }
+      return changed ? next : src;
+    });
+  }, [totalBaseAll]);
+
+
   const byPlano = useMemo(() => {
     const m = new Map();
     for (const r of filtered) m.set(r.plano, (m.get(r.plano) ?? 0) + (r.valor || 0));
@@ -652,6 +1045,7 @@ export default function DashboardRateioUploadInteligentePage() {
     const total = arr.reduce((a, b) => a + (b.valor || 0), 0);
     return arr.map((d) => ({
       ...d,
+      budget: budgetValueForPlano(d.plano),
       pct: total ? (d.valor / total) * 100 : 0,
       pctLabel: total ? `${((d.valor / total) * 100).toFixed(1)}%` : "0.0%",
     }));
@@ -662,13 +1056,90 @@ export default function DashboardRateioUploadInteligentePage() {
   const byMes = useMemo(() => {
     const m = new Map();
     for (const r of filtered) {
-      const k = monthKey(r.competencia ?? r.data);
+      const k = monthKey(r.data);
       m.set(k, (m.get(k) ?? 0) + (r.valor || 0));
     }
     return Array.from(m.entries())
       .map(([mes, valor]) => ({ mes, valor }))
       .sort((a, b) => (a.mes > b.mes ? 1 : -1));
   }, [filtered]);
+
+  const byMesBudget = useMemo(() => {
+    if (!byMes.length) return byMes;
+    // Orçado por mês: soma dos orçamentos por plano.
+    // - Orçamento em % é aplicado sobre o total do mês.
+    // - Orçamento em R$ é considerado mensal (valor fixo) para cada mês.
+    return byMes.map((it) => {
+      const totalMes = Number(it.valor ?? 0) || 0;
+      const orcado = contasNoFiltro.reduce((acc, c) => acc + budgetValueForPlanoMes(c, totalMes, byMes.length), 0);
+      return { ...it, orcado };
+    });
+  }, [byMes, contasNoFiltro, budgets]);
+
+  // Seed automático de orçamentos (só na primeira vez, se não houver nada salvo)
+  useEffect(() => {
+    if (budgetsSeededRef.current) return;
+    // espera ter dados carregados
+    if (!rows?.length || !Number.isFinite(totalBaseAll) || totalBaseAll <= 0) return;
+
+    // Seed inteligente:
+    // - NÃO sobrescreve planos já preenchidos (value>0 ou pct>0)
+    // - Preenche planos com Real>0 com sugestão (Real*1.05)
+    // - Preenche planos sem Real com % padrão (0,10%), baseado SEMPRE no total da base (não no filtro)
+    const DEFAULT_PCT = 0.1;
+
+    // soma Real por plano na base inteira
+    const realByPlano = new Map();
+    for (const r of rows) {
+      const k = String(r?.plano ?? "");
+      const v = Number(r?.valor ?? 0) || 0;
+      if (!k) continue;
+      realByPlano.set(k, (realByPlano.get(k) || 0) + v);
+    }
+
+    // lista completa de planos na base
+    const planosAll = Array.from(realByPlano.keys()).sort((a, b) => String(a).localeCompare(String(b), "pt-BR"));
+
+    setBudgets((prev) => {
+      const src = prev || {};
+      let changed = false;
+      const next = { ...src };
+
+      for (const plano of planosAll) {
+        const b = next[plano];
+        const curV = Number(b?.value ?? 0) || 0;
+        const curP = Number(b?.pct ?? 0) || 0;
+
+        // já tem algo preenchido -> respeita
+        if (curV > 0 || curP > 0) continue;
+
+        const real = Number(realByPlano.get(plano) || 0) || 0;
+
+        if (real > 0) {
+          const value = round2(Math.max(0, real * 1.05));
+          const pct = round2((value / totalBaseAll) * 100);
+          next[plano] = { ...(b || {}), value, pct, mode: "value" };
+          changed = true;
+        } else {
+          const pct = DEFAULT_PCT;
+          const value = round2((totalBaseAll * pct) / 100);
+          next[plano] = { ...(b || {}), value, pct, mode: "pct" };
+          changed = true;
+        }
+      }
+
+      if (changed) {
+        // marca como seeded somente quando aplicou algo
+        budgetsSeededRef.current = true;
+        return next;
+      }
+
+      // nada para fazer -> evita rodar de novo
+      budgetsSeededRef.current = true;
+      return src;
+    });
+  }, [rows, totalBaseAll]);
+
 
   // Quando selecionar meses (Jan/Fev/Mar...), mostramos LINHAS por mês (comparativo entre anos)
   // Ex.: seleciona Jan e Fev -> 2 linhas (Jan e Fev) com cores diferentes; eixo X = ano.
@@ -733,13 +1204,12 @@ export default function DashboardRateioUploadInteligentePage() {
       });
     }
 
-    // adiciona % acumulado para tooltip (ordem das fatias)
+    // adiciona % acumulado (ordem das fatias)
     let run = 0;
     const out2 = out.map((d) => {
       run += d.pct || 0;
       return { ...d, cumPct: run, cumPctLabel: `${run.toFixed(1)}%` };
     });
-
     return out2;
   }, [byPlano, cutoffPct]);
 
@@ -819,6 +1289,7 @@ const outrosPlanos = useMemo(() => {
     const total = arr.reduce((a, b) => a + (b.valor || 0), 0);
     return arr.map((d) => ({
       ...d,
+      budget: budgetValueForPlano(d.plano),
       pct: total ? (d.valor / total) * 100 : 0,
       pctLabel: total ? `${((d.valor / total) * 100).toFixed(1)}%` : "0.0%",
     }));
@@ -833,20 +1304,35 @@ const outrosPlanos = useMemo(() => {
 
   const drillByFornecedor = useMemo(() => aggTop(drillRows, "fornecedor", 12), [drillRows]);
   const drillByEmpresa = useMemo(() => aggTop(drillRows, "empresa", 12), [drillRows]);
-  const drillByConta = useMemo(() => aggTop(drillRows, "conta", 12), [drillRows]);
+  const drillByConta = useMemo(() => {
+    const base = aggTop(drillRows, "conta", 12);
+    return base.map((d) => {
+      const previsto = budgetValueForPlano(d.name);
+      return { ...d, budget: previsto, status: budgetStatus(d.valor, previsto) };
+    });
+  }, [drillRows, budgets, totalGeral]);
 
   const drillByMes = useMemo(() => {
     // evolução do plano selecionado (independente do drillMes)
     if (!drillRowsBase.length) return [];
+
+    // total geral por mês (para orçamento por %)
+    const totalMesMap = new Map(byMes.map((d) => [d.mes, d.valor]));
+
     const m = new Map();
     for (const r of drillRowsBase) {
       const k = monthKey(r.data ?? r.competencia);
       m.set(k, (m.get(k) ?? 0) + (r.valor || 0));
     }
+
     return Array.from(m.entries())
-      .map(([mes, valor]) => ({ mes, valor }))
+      .map(([mes, valor]) => {
+        const totalMes = totalMesMap.get(mes) ?? 0;
+        const previsto = budgetValueForPlanoMes(drillPlano, totalMes, m.size);
+        return { mes, valor, previsto, status: budgetStatus(valor, previsto) };
+      })
       .sort((a, b) => (a.mes > b.mes ? 1 : -1));
-  }, [drillRowsBase]);
+  }, [drillRowsBase, byMes, drillPlano, budgets, totalGeral]);
 
   return (
     <div className="min-h-screen bg-[#0c1118] text-white">
@@ -922,7 +1408,23 @@ const outrosPlanos = useMemo(() => {
           </div>
         </Card>
 
-        <Card title="Filtros" right={<div className="text-[11px] text-white/60">Busca + Plano</div>}>
+        <Card
+          title="Filtros"
+          right={
+            <div className="flex items-center gap-2">
+              <div className="text-[11px] text-white/60">Busca + Plano</div>
+              <button
+                type="button"
+                onClick={() => setBudgetOpen(true)}
+                className="px-2.5 py-1 rounded-lg text-[11px] border border-white/10 bg-white/5 text-white/80 hover:bg-white/10"
+                disabled={!rows.length}
+                style={{ colorScheme: "dark" }}
+              >
+                Orçamentos
+              </button>
+            </div>
+          }
+        >
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <div>
               <div className="text-[11px] text-white/60 mb-1">Busca (plano, conta, fornecedor...)</div>
@@ -940,18 +1442,37 @@ const outrosPlanos = useMemo(() => {
               <select
                 value={fPlano}
                 onChange={(e) => setFPlano(e.target.value)}
-                className="w-full rounded-lg px-3 py-2 bg-white/5 border border-white/10 text-white outline-none focus:ring-2 focus:ring-sky-500/40"
+                className="w-full rounded-lg bg-[#0B1220] text-white border border-white/20 px-3 py-2 outline-none focus:ring-2 focus:ring-sky-500/40"
                 disabled={!rows.length}
               >
-                {planos.map((p) => (
-                  <option key={p} value={p} className="bg-[#0c1118]">
-                    {p}
-                  </option>
-                ))}
+                {planos.map((p) => {
+                  const st = p !== "Todos" ? planoStatusMap?.[p] : null;
+                  const label = p === "Todos" ? "Todos" : `${st?.emoji ?? "⚪"} ${p}`;
+                  return (
+                    <option key={p} value={p} className="text-black bg-white">
+                      {label}
+                    </option>
+                  );
+                })}
               </select>
             </div>
 <div className="md:col-span-2">
               <div className="text-[11px] text-white/60 mb-1">Meses (Vencimento)</div>
+            <div className="mt-3 flex items-center gap-3 flex-wrap">
+              <div className="text-xs text-white/60 whitespace-nowrap">Corte p/ “Outros”</div>
+              <input
+                type="range"
+                min={0}
+                max={10}
+                step={0.5}
+                value={cutoffPct}
+                onChange={(e) => setCutoffPct(Number(e.target.value))}
+                className="w-52 accent-white"
+              />
+              <div className="text-xs text-white/80 w-12 text-right">{cutoffPct.toFixed(1)}%</div>
+              <div className="text-xs text-white/50">Agrupa planos com participação menor que o corte.</div>
+            </div>
+
               <div className="flex flex-wrap gap-2">
                 {MESES_LABEL.map((m, idx) => {
                   const active = mesesSel.includes(idx);
@@ -994,27 +1515,80 @@ const outrosPlanos = useMemo(() => {
           </div>
         </Card>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
           <Card title="Total Geral (após filtros)">
-            <div className="text-3xl font-bold" style={{ color: C_GREEN }}>
+            <div className="text-xl font-semibold" style={{ color: C_GREEN }}>
               {fmtBRL(totalGeral)}
             </div>
             <div className="text-[11px] text-white/60 mt-1">{rows.length ? "Base real carregada" : "Carregue um Excel para alimentar os gráficos"}</div>
             {rows.length && (
               <div className="text-[11px] text-white/50 mt-1">
-                Valor (min/max): {fmtBRL(debugValores.min)} / {fmtBRL(debugValores.max)} • Coluna: {debugValores.keys.join(", ") || "-"}
               </div>
 
             )}
             {rows.length && (
               <div className="text-[11px] text-white/50 mt-1">
-                Vencimentos lidos: {debugDatas.ok}/{debugDatas.total} • Ex.: {debugDatas.sample.join(", ") || "-"}
               </div>
             )}
           </Card>
 
+          <Card title="Resumo Orçamento">
+            <div className="flex items-end justify-between gap-3">
+              <div>
+                <div className="text-[11px] text-white/60">Previsto (total)</div>
+                <div className="text-lg font-semibold text-white">{fmtBRL(previstoTotal)}</div>
+              </div>
+              <div className="text-right">
+                <div className="text-[11px] text-white/60">Execução</div>
+                <div className={`text-lg font-semibold ${previstoTotal ? (execPct > 100 ? "text-rose-200" : execPct >= 90 ? "text-amber-200" : "text-emerald-200") : "text-white/70"}`}>
+                  {previstoTotal ? `${execPct.toFixed(1)}%` : "—"}
+                </div>
+              </div>
+            </div>
+            <div className="mt-2 flex items-center justify-between text-xs text-white/70">
+              <span>Diferença</span>
+              <span className={`${diffBudget > 0 ? "text-rose-200" : "text-emerald-200"} font-medium`}>
+                {previstoTotal ? fmtBRL(diffBudget) : "—"}
+              </span>
+            </div>
+            <div className="mt-2 flex flex-wrap gap-2 text-[11px]">
+              <button
+                type="button"
+                onClick={() => { setStatusModalKey("ok"); setStatusModalQuery(""); setStatusModalOpen(true); }}
+                className="px-2 py-0.5 rounded-lg border border-emerald-400/30 bg-emerald-500/20 text-emerald-200 hover:bg-emerald-500/25 active:scale-[0.99] transition"
+                title="Ver planos Dentro"
+              >
+                Dentro: {statusCounts.ok}
+              </button>
+              <button
+                type="button"
+                onClick={() => { setStatusModalKey("warn"); setStatusModalQuery(""); setStatusModalOpen(true); }}
+                className="px-2 py-0.5 rounded-lg border border-amber-400/30 bg-amber-500/20 text-amber-200 hover:bg-amber-500/25 active:scale-[0.99] transition"
+                title="Ver planos em Atenção"
+              >
+                Atenção: {statusCounts.warn}
+              </button>
+              <button
+                type="button"
+                onClick={() => { setStatusModalKey("over"); setStatusModalQuery(""); setStatusModalOpen(true); }}
+                className="px-2 py-0.5 rounded-lg border border-rose-400/30 bg-rose-500/20 text-rose-200 hover:bg-rose-500/25 active:scale-[0.99] transition"
+                title="Ver planos Estourados"
+              >
+                Estourado: {statusCounts.over}
+              </button>
+              <button
+                type="button"
+                onClick={() => { setStatusModalKey("none"); setStatusModalQuery(""); setStatusModalOpen(true); }}
+                className="px-2 py-0.5 rounded-lg border border-white/15 bg-white/10 text-white/70 hover:bg-white/15 active:scale-[0.99] transition"
+                title="Ver planos Sem orçamento"
+              >
+                Sem: {statusCounts.none}
+              </button>
+            </div>
+          </Card>
+
           <Card title="Linhas / Itens">
-            <div className="text-3xl font-bold text-white/90">{filtered.length}</div>
+            <div className="text-xl font-semibold text-white/90">{filtered.length}</div>
             <div className="text-[11px] text-white/60 mt-1">Registros após filtros</div>
           </Card>
 
@@ -1046,7 +1620,7 @@ const outrosPlanos = useMemo(() => {
                         />
                       ))}
                     </Pie>
-                    <Tooltip content={<TooltipRich labelPrefix="Categoria" />} />
+                    <Tooltip cursor={false} content={<TooltipRich labelPrefix="Plano" />} />
                   </PieChart>
                 </ResponsiveContainer>
               ) : (
@@ -1064,19 +1638,20 @@ const outrosPlanos = useMemo(() => {
             <div style={{ height: 340 }}>
               {topPlanos.length ? (
                 <ResponsiveContainer width="100%" height={340}>
-                  <BarChart data={topPlanos}>
+                  <BarChart data={topPlanos} barGap={-34} margin={{ top: 34, right: 12, left: 0, bottom: 0 }}>
                     <CartesianGrid stroke="rgba(255,255,255,0.08)" strokeDasharray="3 3" />
                     <XAxis dataKey="plano" hide />
                     <YAxis tick={{ fill: "rgba(255,255,255,0.65)", fontSize: 12 }} />
-                    <Tooltip content={<TooltipRich labelPrefix="Categoria" />} />
-                    <Bar dataKey="valor" fill={C_BLUE} radius={[10, 10, 0, 0]} onClick={(d) => {
+                    <Tooltip cursor={false} content={<TooltipRich labelPrefix="Categoria" />} />
+                    <Bar dataKey="budget" name="Previsto" fill={C_BLUE} fillOpacity={0.18} radius={[10, 10, 0, 0]} barSize={34} />
+                        <Bar dataKey="valor" name="Real" fill={C_BLUE} radius={[10, 10, 0, 0]} barSize={22} onClick={(d) => {
                       const plano = d?.name ?? d?.payload?.plano;
                       if (plano) {
                         setDrillPlano(plano);
                         setDrillMes("");
                       }
                     }}>
-                      <LabelList dataKey="pctLabel" position="top" fill="rgba(255,255,255,0.75)" fontSize={12} />
+                      <LabelList dataKey="pctLabel" position="top" offset={10} fill="rgba(255,255,255,0.75)" fontSize={12} />
                     </Bar>
                   </BarChart>
                 </ResponsiveContainer>
@@ -1097,7 +1672,7 @@ const outrosPlanos = useMemo(() => {
                       <CartesianGrid strokeDasharray="3 3" />
                       <XAxis dataKey="ano" />
                       <YAxis />
-                      <Tooltip content={<TooltipRich labelPrefix="Categoria" />} />
+                      <Tooltip cursor={false} content={<TooltipRich labelPrefix="Categoria" />} />
                       {byAnoMesLinhas.keys.map((k, i) => (
                         <Line
                           key={k}
@@ -1117,13 +1692,30 @@ const outrosPlanos = useMemo(() => {
                 )
               ) : byMes.length ? (
                 <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={byMes}>
+                  <ComposedChart data={byMesBudget}>
                     <CartesianGrid strokeDasharray="3 3" />
                     <XAxis dataKey="mes" />
                     <YAxis />
-                    <Tooltip content={<TooltipRich labelPrefix="Categoria" />} />
-                    <Line type="monotone" dataKey="valor" strokeWidth={3} dot={false} />
-                  </LineChart>
+                    <Tooltip cursor={false} content={<TooltipRich labelPrefix="Mês" />} />
+                    <Area
+                      type="monotone"
+                      dataKey="orcado"
+                      name="Previsto"
+                      stroke={C_BLUE}
+                      fill={C_BLUE}
+                      fillOpacity={0.18}
+                      isAnimationActive={false}
+                    />
+                    <Line
+                      type="monotone"
+                      dataKey="valor"
+                      name="Real"
+                      stroke={C_BLUE}
+                      strokeWidth={3}
+                      dot={false}
+                      isAnimationActive={false}
+                    />
+                  </ComposedChart>
                 </ResponsiveContainer>
               ) : (
                 <div className="h-full grid place-items-center text-white/60 text-sm">Sem dados.</div>
@@ -1151,83 +1743,87 @@ const outrosPlanos = useMemo(() => {
               </div>
             }
           >
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
-              <div className="rounded-xl border border-white/10 bg-white/5 p-3">
+            <div className="grid grid-cols-1 gap-3 mb-3">
+              <div className="rounded-xl border border-white/10 bg-white/5 px-4 py-2">
                 <div className="text-[11px] text-white/60">Total “Outros”</div>
                 <div className="text-xl font-bold" style={{ color: C_GREEN }}>
                   {fmtBRL(outrosDetalhe.total)}
                 </div>
               </div>
-              <div className="rounded-xl border border-white/10 bg-white/5 p-3 md:col-span-2">
-                <div className="text-[11px] text-white/60">
-                  Clique em um plano para abrir o drill (Plano → Empresa → Fornecedor)
-                </div>
-                <div className="mt-2 flex flex-wrap gap-2 max-h-24 overflow-auto">
-                  {outrosDetalhe.rows.slice(0, 24).map((d) => (
-                    <button
-                      key={d.plano}
-                      type="button"
-                      onClick={() => {
-                        setOutrosOpen(false);
-                        setDrillPlano(d.plano);
-                      }}
-                      className="px-2 py-1 rounded-lg text-xs border bg-white/5 border-white/10 text-white/80 hover:bg-white/10"
-                      title={d.plano}
-                    >
-                      {d.plano} • {d.pctLabel}
-                    </button>
-                  ))}
-                </div>
-              </div>
+
             </div>
 
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              <div className="rounded-xl border border-white/10 bg-white/5 p-3">
-                <div className="text-sm font-semibold text-white/90 mb-2">Top planos dentro de “Outros”</div>
-                <div style={{ height: 340 }}>
-                  {outrosDetalhe.rows.length ? (
-                    <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={outrosDetalhe.rows.slice(0, 15)} layout="vertical" margin={{ left: 24, right: 24 }}>
-                        <CartesianGrid strokeDasharray="3 3" />
-                        <XAxis type="number" />
-                        <YAxis type="category" dataKey="plano" width={160} />
-                        <Tooltip content={<TooltipRich labelPrefix="Plano" />} />
-                        <Bar dataKey="valor" radius={[8, 8, 8, 8]}>
-                          <LabelList dataKey="pctLabel" position="right" />
-                        </Bar>
-                      </BarChart>
-                    </ResponsiveContainer>
-                  ) : (
-                    <div className="h-full grid place-items-center text-white/60 text-sm">Sem dados.</div>
-                  )}
-                </div>
-              </div>
-
-              <div className="rounded-xl border border-white/10 bg-white/5 p-3">
-                <div className="text-sm font-semibold text-white/90 mb-2">Lista completa</div>
-                <div className="max-h-[360px] overflow-auto rounded-lg border border-white/10">
-                  {outrosDetalhe.rows.map((d, i) => (
-                    <button
-                      key={`${d.plano}-${i}`}
-                      type="button"
-                      onClick={() => {
-                        setOutrosOpen(false);
-                        setDrillPlano(d.plano);
-                      }}
-                      className="w-full text-left px-3 py-2 hover:bg-white/5 flex items-center gap-2 border-b border-white/5 last:border-b-0"
-                      title={d.plano}
-                    >
-                      <span className="truncate text-white/80">{d.plano}</span>
-                      <span className="ml-auto text-white/70">{fmtBRL(d.valor)}</span>
-                      <span className="text-white/50 text-xs w-[56px] text-right">{d.pctLabel}</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </div>
-          </Card>
+                <div className="rounded-xl border border-white/10 bg-white/5 p-3 mb-4">
+      <div className="text-sm font-semibold text-white/90 mb-2 flex items-center justify-between">
+        <span>Top planos dentro de “Outros”</span>
+        <span className="text-[11px] text-white/50">Top 20</span>
+      </div>
+      <div style={{ height: 360 }}>
+        {outrosDetalhe.rows.length ? (
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart
+              data={outrosDetalhe.rows.slice(0, 20)}
+              layout="vertical"
+              margin={{ left: 24, right: 24, top: 8, bottom: 8 }}
+            >
+<XAxis
+                type="number"
+                tick={{ fill: "rgba(255,255,255,0.65)", fontSize: 12 }}
+              />
+              <YAxis
+                type="category"
+                dataKey="plano"
+                width={220}
+                tick={{ fill: "rgba(255,255,255,0.75)", fontSize: 12 }}
+              />
+              <Tooltip cursor={false} content={<TooltipRich labelPrefix="Plano" />} />
+              <Bar
+                dataKey="valor"
+                fill={C_BLUE}
+                radius={[8, 8, 8, 8]}
+                onClick={(d) => {
+                  const name = d?.payload?.plano ?? d?.plano;
+                  if (!name) return;
+                  setOutrosOpen(false);
+                  setDrillPlano(name);
+                }}
+              >
+                <LabelList dataKey="pctLabel" position="right" />
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        ) : (
+          <div className="h-full grid place-items-center text-white/60 text-sm">Sem dados.</div>
         )}
+      </div>
+      <div className="mt-2 text-[11px] text-white/45">
+        Clique em uma barra para abrir o drill do plano.
+      </div>
+    </div>
 
+    <div className="rounded-xl border border-white/10 bg-white/5 p-3">
+      <div className="text-sm font-semibold text-white/90 mb-2">Lista completa</div>
+      <div className="max-h-[360px] overflow-auto rounded-lg border border-white/10">
+        {outrosDetalhe.rows.map((d, i) => (
+          <button
+            key={`${d.plano}-${i}`}
+            type="button"
+            onClick={() => {
+              setOutrosOpen(false);
+              setDrillPlano(d.plano);
+            }}
+            className="w-full text-left px-3 py-2 hover:bg-white/5 flex items-center gap-2 border-b border-white/5 last:border-b-0"
+            title={d.plano}
+          >
+            <span className="truncate text-white/80">{d.plano}</span>
+            <span className="ml-auto text-white/70">{fmtBRL(d.valor)}</span>
+            <span className="text-white/50 text-xs w-[56px] text-right">{d.pctLabel}</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  </Card>
+)}
 
         {drillPlano && drillPlano !== "Outros" && (
           <Card
@@ -1257,7 +1853,7 @@ const outrosPlanos = useMemo(() => {
               </div>
             }
           >
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
+            <div className="grid grid-cols-1 gap-3 mb-3">
               <div className="rounded-xl border border-white/10 bg-white/5 p-3">
                 <div className="text-[11px] text-white/60">Total (plano + filtros)</div>
                 <div className="text-xl font-bold" style={{ color: C_GREEN }}>
@@ -1279,17 +1875,17 @@ const outrosPlanos = useMemo(() => {
                 <div style={{ height: 340 }}>
                   {drillByFornecedor.length ? (
                     <ResponsiveContainer width="100%" height={340}>
-                      <BarChart data={drillByFornecedor}>
-                        <CartesianGrid stroke="rgba(255,255,255,0.08)" strokeDasharray="3 3" />
+                      <BarChart data={drillByFornecedor} margin={{ top: 28, right: 12, left: 0, bottom: 0 }}>
+                        <CartesianGrid stroke="rgba(255,255,255,0.08)"  />
                         <XAxis dataKey="name" hide />
                         <YAxis tick={{ fill: "rgba(255,255,255,0.65)", fontSize: 12 }} />
-                        <Tooltip content={<TooltipRich labelPrefix="Categoria" />} />
-                        <Bar dataKey="valor" fill={C_BLUE} radius={[10, 10, 0, 0]} onClick={(d) => {
+                        <Tooltip cursor={false} content={<TooltipRich labelPrefix="Categoria" />} />
+                        <Bar dataKey="valor" name="Real" fill={C_BLUE} radius={[10, 10, 0, 0]} barSize={22} onClick={(d) => {
                           const name = d?.payload?.name ?? d?.name;
                           if (!name) return;
                           openDetail(`Títulos — Fornecedor: ${name}`, drillRows.filter((r) => r.fornecedor === name));
                         }}>
-                      <LabelList dataKey="pctLabel" position="top" fill="rgba(255,255,255,0.75)" fontSize={12} />
+                      <LabelList dataKey="pctLabel" position="top" offset={10} fill="rgba(255,255,255,0.75)" fontSize={12} />
                     </Bar>
                       </BarChart>
                     </ResponsiveContainer>
@@ -1303,17 +1899,17 @@ const outrosPlanos = useMemo(() => {
                 <div style={{ height: 340 }}>
                   {drillByEmpresa.length ? (
                     <ResponsiveContainer width="100%" height={340}>
-                      <BarChart data={drillByEmpresa}>
+                      <BarChart data={drillByEmpresa} margin={{ top: 28, right: 12, left: 0, bottom: 0 }}>
                         <CartesianGrid stroke="rgba(255,255,255,0.08)" strokeDasharray="3 3" />
                         <XAxis dataKey="name" hide />
                         <YAxis tick={{ fill: "rgba(255,255,255,0.65)", fontSize: 12 }} />
-                        <Tooltip content={<TooltipRich labelPrefix="Categoria" />} />
-                        <Bar dataKey="valor" fill={C_PURPLE} radius={[10, 10, 0, 0]} onClick={(d) => {
+                        <Tooltip cursor={false} content={<TooltipRich labelPrefix="Categoria" />} />
+                        <Bar dataKey="valor" fill={C_PURPLE} radius={[10, 10, 0, 0]} barSize={28} onClick={(d) => {
                           const name = d?.payload?.name ?? d?.name;
                           if (!name) return;
                           openDetail(`Títulos — Empresa/Unidade: ${name}`, drillRows.filter((r) => r.empresa === name));
                         }}>
-                      <LabelList dataKey="pctLabel" position="top" fill="rgba(255,255,255,0.75)" fontSize={12} />
+                      <LabelList dataKey="pctLabel" position="top" offset={10} fill="rgba(255,255,255,0.75)" fontSize={12} />
                     </Bar>
                       </BarChart>
                     </ResponsiveContainer>
@@ -1327,19 +1923,19 @@ const outrosPlanos = useMemo(() => {
                 <div style={{ height: 340 }}>
                   {drillByConta.length ? (
                     <ResponsiveContainer width="100%" height={340}>
-                      <BarChart data={drillByConta}>
+                      <ComposedChart data={drillByConta}>
                         <CartesianGrid stroke="rgba(255,255,255,0.08)" strokeDasharray="3 3" />
                         <XAxis dataKey="name" hide />
                         <YAxis tick={{ fill: "rgba(255,255,255,0.65)", fontSize: 12 }} />
-                        <Tooltip content={<TooltipRich labelPrefix="Categoria" />} />
+                        <Tooltip cursor={false} content={<TooltipRich labelPrefix="Categoria" />} />
                         <Bar dataKey="valor" fill={C_CYAN} radius={[10, 10, 0, 0]} onClick={(d) => {
                           const name = d?.payload?.name ?? d?.name;
                           if (!name) return;
                           openDetail(`Títulos — Conta: ${name}`, drillRows.filter((r) => r.conta === name));
                         }}>
-                      <LabelList dataKey="pctLabel" position="top" fill="rgba(255,255,255,0.75)" fontSize={12} />
+                      <LabelList dataKey="pctLabel" position="top" offset={10} fill="rgba(255,255,255,0.75)" fontSize={12} />
                     </Bar>
-                      </BarChart>
+                      </ComposedChart>
                     </ResponsiveContainer>
                   ) : (
                     <div className="h-full grid place-items-center text-white/60 text-sm">Sem dados.</div>
@@ -1355,8 +1951,9 @@ const outrosPlanos = useMemo(() => {
                         <CartesianGrid stroke="rgba(255,255,255,0.08)" strokeDasharray="3 3" />
                         <XAxis dataKey="mes" tick={{ fill: "rgba(255,255,255,0.65)", fontSize: 12 }} />
                         <YAxis tick={{ fill: "rgba(255,255,255,0.65)", fontSize: 12 }} />
-                        <Tooltip content={<TooltipRich labelPrefix="Categoria" />} />
-                        <Line type="monotone" dataKey="valor" stroke={C_GREEN} strokeWidth={3} dot={false} />
+                        <Tooltip cursor={false} content={<TooltipRich labelPrefix="Categoria" />} />
+                        <Line type="monotone" dataKey="previsto" name="Previsto" stroke={C_AMBER} strokeWidth={2} dot={false} strokeDasharray="6 4" />
+                        <Line type="monotone" dataKey="valor" name="Real" stroke={C_GREEN} strokeWidth={3} dot={false} />
                       </LineChart>
                     </ResponsiveContainer>
                   ) : (
@@ -1373,10 +1970,280 @@ const outrosPlanos = useMemo(() => {
         )}
 
 
-        {/* MODAL DETALHE (clique nos gráficos de barras do drill) */}
+        {/* MODAL ORÇAMENTOS (Previsto por Plano) */}
+        {budgetOpen && (
+          <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm">
+            <div className="max-w-4xl mx-auto p-4 md:p-6">
+              <div
+                className="rounded-2xl p-4 md:p-5 shadow-xl"
+                style={{ border: `1px solid ${C_CARD_BORDER}`, background: "rgba(12,17,24,0.98)" }}
+              >
+                <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                  <div>
+                    <div className="text-sm font-semibold text-white/90">Orçamentos por Plano</div>
+                    <div className="text-[11px] text-white/60">
+                      Preencha o previsto por plano em R$ ou em %. Fica salvo neste computador (LocalStorage).
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    <input
+                      value={budgetQuery}
+                      onChange={(e) => setBudgetQuery(e.target.value)}
+                      placeholder="Buscar plano..."
+                      className="w-64 max-w-full rounded-lg px-3 py-2 bg-white/5 border border-white/10 text-white placeholder:text-white/40 outline-none focus:ring-2 focus:ring-sky-500/40 text-sm"
+                      style={{ colorScheme: "dark" }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => clearAllBudgets()}
+                      className="px-3 py-2 rounded-lg text-sm border bg-white/5 border-white/10 text-white/80 hover:bg-white/10"
+                      disabled={!Object.keys(budgets || {}).length}
+                    >
+                      Zerar
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setBudgetOpen(false)}
+                      className="px-3 py-2 rounded-lg text-sm border bg-white/5 border-white/10 text-white/80 hover:bg-white/10"
+                    >
+                      Fechar
+                    </button>
+                  </div>
+                </div>
+
+                <div className="mt-4 rounded-xl border border-white/10 overflow-hidden">
+                  <div className="max-h-[65vh] overflow-auto">
+                    <table className="w-full text-[12px]">
+                      <thead className="sticky top-0 bg-[#0c1118] border-b border-white/10">
+                        <tr className="text-left">
+                          <th className="p-2">Plano</th>
+                          <th className="p-2 w-[180px] text-right">Previsto (R$)</th>
+                          <th className="p-2 w-[140px] text-right">Previsto (%)</th>
+                          <th className="p-2 w-[120px] text-right">Ações</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {budgetList.map((plano) => {
+                          const b = budgets?.[plano] || {};
+                          const vNum = typeof b.value === "number" ? b.value : NaN;
+                          const pNum = typeof b.pct === "number" ? b.pct : NaN;
+                          const vUi = budgetUi?.[plano]?.value;
+                          const pUi = budgetUi?.[plano]?.pct;
+                          const v = typeof vUi === "string" ? vUi : fmtBRNumber(vNum);
+                          const p = typeof pUi === "string" ? pUi : fmtPctNumber(pNum);
+                          return (
+                            <tr key={plano} className="border-b border-white/5 hover:bg-white/5">
+                              <td className="p-2 text-white/85">{plano}</td>
+
+                              <td className="p-2 text-right">
+                                <input
+                                  value={v}
+                                  onChange={(e) => {
+                                    const s = sanitizeNumericText(e.target.value);
+                                    setBudgetUi((prev) => ({
+                                      ...(prev || {}),
+                                      [plano]: { ...(prev?.[plano] || {}), value: s },
+                                    }));
+                                  }}
+                                  onBlur={() => {
+                                    const raw = budgetUi?.[plano]?.value ?? "";
+                                    const n = round2(parseNumberInput(raw));
+                                    // persiste
+                                    setBudgetValue(plano, raw);
+                                    // atualiza UI (preenche o % automaticamente)
+                                    const pct = totalGeral > 0 && Number.isFinite(n) ? round2((n / totalBaseAll) * 100) : NaN;
+                                    setBudgetUi((prev) => ({
+                                      ...(prev || {}),
+                                      [plano]: {
+                                        ...(prev?.[plano] || {}),
+                                        value: Number.isFinite(n) && n > 0 ? fmtBRNumber(n) : "",
+                                        pct: Number.isFinite(pct) && pct > 0 ? fmtPctNumber(pct) : (prev?.[plano]?.pct ?? ""),
+                                      },
+                                    }));
+                                  }}
+                                  placeholder="0"
+                                  inputMode="decimal"
+                                  className="w-full text-right rounded-lg px-3 py-2 bg-white/5 border border-white/10 text-white placeholder:text-white/30 outline-none focus:ring-2 focus:ring-sky-500/40"
+                                  style={{ colorScheme: "dark" }}
+                                />
+                              </td>
+
+                              <td className="p-2 text-right">
+                                <input
+                                  value={p}
+                                  onChange={(e) => {
+                                    const s = sanitizeNumericText(e.target.value);
+                                    setBudgetUi((prev) => ({
+                                      ...(prev || {}),
+                                      [plano]: { ...(prev?.[plano] || {}), pct: s },
+                                    }));
+                                  }}
+                                  onBlur={() => {
+                                    const raw = budgetUi?.[plano]?.pct ?? "";
+                                    const pNum = round2(parseNumberInput(raw));
+                                    // persiste
+                                    setBudgetPct(plano, raw);
+                                    // atualiza UI (preenche o R$ automaticamente)
+                                    const vNum = totalGeral > 0 && Number.isFinite(pNum) ? round2((totalBaseAll * pNum) / 100) : NaN;
+                                    setBudgetUi((prev) => ({
+                                      ...(prev || {}),
+                                      [plano]: {
+                                        ...(prev?.[plano] || {}),
+                                        pct: Number.isFinite(pNum) && pNum > 0 ? fmtPctNumber(pNum) : "",
+                                        value: Number.isFinite(vNum) && vNum > 0 ? fmtBRNumber(vNum) : (prev?.[plano]?.value ?? ""),
+                                      },
+                                    }));
+                                  }}
+                                  placeholder={totalGeral > 0 ? "0" : "—"}
+                                  inputMode="decimal"
+                                  className="w-full text-right rounded-lg px-3 py-2 bg-white/5 border border-white/10 text-white placeholder:text-white/30 outline-none focus:ring-2 focus:ring-sky-500/40"
+                                  style={{ colorScheme: "dark" }}
+                                  disabled={totalGeral <= 0}
+                                  title={totalGeral > 0 ? "Percentual em cima do total filtrado" : "Sem total filtrado para calcular %"}
+                                />
+                              </td>
+
+                              <td className="p-2 text-right">
+                                <button
+                                  type="button"
+                                  onClick={() => clearBudget(plano)}
+                                  className="px-2.5 py-1 rounded-lg text-[11px] border border-white/10 bg-white/5 text-white/75 hover:bg-white/10"
+                                  disabled={!(b && (b.value != null || b.pct != null))}
+                                >
+                                  Limpar
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                        {!budgetList.length && (
+                          <tr>
+                            <td className="p-3 text-white/60 text-sm" colSpan={4}>
+                              Nenhum plano encontrado.
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                <div className="mt-3 text-[11px] text-white/55">
+                  % é calculado em cima do <span className="text-white/80">Total Geral filtrado</span> (agora: <span className="text-white/80">{fmtBRL(totalGeral)}</span>).
+                  Dica: depois a gente pode usar esses valores para mostrar <span className="text-white/80">Real x Previsto</span> nos gráficos.
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        
+        {/* MODAL STATUS (clique nos chips Dentro/Atenção/Estourado/Sem) */}
+        {statusModalOpen && (
+          <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm">
+            <div className="max-w-5xl mx-auto p-4 md:p-4">
+              <div
+                className="rounded-2xl p-4 md:p-5 shadow-xl"
+                style={{ border: `1px solid ${C_CARD_BORDER}`, background: "rgba(12,17,24,0.98)" }}
+              >
+                <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                  <div>
+                    <div className="text-sm font-semibold text-white/90">
+                      Planos {statusModalKey === "ok" ? "Dentro" : statusModalKey === "warn" ? "em Atenção" : statusModalKey === "over" ? "Estourados" : "Sem orçamento"}
+                    </div>
+                    <div className="text-[11px] text-white/60">
+                      {statusPlanosFiltered.length} plano(s) • Base: filtros atuais
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <input
+                      value={statusModalQuery}
+                      onChange={(e) => setStatusModalQuery(e.target.value)}
+                      placeholder="Buscar plano..."
+                      className="w-56 max-w-[60vw] rounded-xl bg-white/5 border border-white/10 px-3 py-2 text-sm text-white/80 outline-none focus:border-white/20"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setStatusModalOpen(false)}
+                      className="px-3 py-2 rounded-xl border border-white/10 bg-white/5 hover:bg-white/10 text-sm text-white/80"
+                    >
+                      Fechar
+                    </button>
+                  </div>
+                </div>
+
+                <div className="mt-3 overflow-auto rounded-xl border border-white/10">
+                  <table className="min-w-[760px] w-full text-sm">
+                    <thead className="bg-white/5 text-white/70">
+                      <tr>
+                        <th className="text-left font-medium px-3 py-2">Status</th>
+                        <th className="text-left font-medium px-3 py-2">Plano</th>
+                        <th className="text-right font-medium px-3 py-2">Previsto</th>
+                        <th className="text-right font-medium px-3 py-2">Real</th>
+                        <th className="text-right font-medium px-3 py-2">Execução</th>
+                        <th className="text-right font-medium px-3 py-2">Ações</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {statusPlanosFiltered.map((p) => (
+                        <tr key={p.plano} className="border-t border-white/10 hover:bg-white/5">
+                          <td className="px-3 py-2 text-white/80">
+                            <span className="mr-2">{p.statusEmoji}</span>
+                            <span className="text-[12px]">{p.statusLabel}</span>
+                          </td>
+                          <td className="px-3 py-2 text-white/90">{p.plano}</td>
+                          <td className="px-3 py-2 text-right text-white/80">{p.previsto ? fmtBRL(p.previsto) : "—"}</td>
+                          <td className="px-3 py-2 text-right text-white/80">{fmtBRL(p.real)}</td>
+                          <td className="px-3 py-2 text-right">
+                            {p.previsto ? (
+                              <span className={`${p.execPct > 100 ? "text-rose-200" : p.execPct >= 90 ? "text-amber-200" : "text-emerald-200"} font-medium`}>
+                                {p.execPct.toFixed(1)}%
+                              </span>
+                            ) : (
+                              <span className="text-white/50">—</span>
+                            )}
+                          </td>
+                          <td className="px-3 py-2 text-right">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setStatusModalOpen(false);
+                                setDrillPlano(p.plano);
+                                setDrillMes("");
+                                // opcional: já abre o modal de detalhamento do plano via pizza
+                              }}
+                              className="px-3 py-1.5 rounded-xl border border-white/10 bg-white/5 hover:bg-white/10 text-[12px] text-white/80"
+                            >
+                              Abrir detalhado
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                      {!statusPlanosFiltered.length && (
+                        <tr>
+                          <td colSpan={6} className="px-3 py-8 text-center text-white/60">
+                            Nenhum plano encontrado para esse status.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="mt-3 text-[11px] text-white/50">
+                  Dica: clique em <span className="text-white/70">Abrir detalhado</span> para abrir o drill daquele plano (igual clicar na pizza).
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+{/* MODAL DETALHE (clique nos gráficos de barras do drill) */}
         {detailOpen && (
           <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm">
-            <div className="max-w-6xl mx-auto p-4 md:p-6">
+            <div className="max-w-6xl mx-auto p-4 md:p-4">
               <div
                 className="rounded-2xl p-4 md:p-5 shadow-xl"
                 style={{ border: `1px solid ${C_CARD_BORDER}`, background: "rgba(12,17,24,0.98)" }}
@@ -1437,7 +2304,24 @@ const outrosPlanos = useMemo(() => {
                         .map((r, i) => (
                           <tr key={`${r.id}-${i}`} className="border-t border-white/10">
                             <td className="p-2 text-white/80">{r.data ?? "-"}</td>
-                            <td className="p-2 text-white/90">{r.plano}</td>
+                            <td className="p-2 text-white/90">
+                              {(() => {
+                                const st = planoStatusMap?.[r.plano];
+                                const emoji = st?.emoji ?? "⚪";
+                                if (!st || st.key === "none") {
+                                  return <span className="inline-flex items-center gap-2"><span aria-hidden>{emoji}</span><span>{r.plano}</span></span>;
+                                }
+                                return (
+                                  <span className="inline-flex items-center gap-2">
+                                    <span aria-hidden>{emoji}</span>
+                                    <span>{r.plano}</span>
+                                    <span className={`ml-1 px-2 py-0.5 rounded-lg border text-[11px] ${st.cls}`} title={`Real: ${fmtBRL(st.real)} • Previsto: ${fmtBRL(st.previsto)} • Execução: ${(st.ratio * 100).toFixed(1)}%`}>
+                                      {st.label}
+                                    </span>
+                                  </span>
+                                );
+                              })()}
+                            </td>
                             <td className="p-2 text-white/80">{r.conta}</td>
                             <td className="p-2 text-white/80">{r.empresa}</td>
                             <td className="p-2 text-white/80">{r.fornecedor}</td>
