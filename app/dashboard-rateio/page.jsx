@@ -523,6 +523,7 @@ export default function DashboardRateioUploadInteligentePage() {
   const [error, setError] = useState("");
 
   const [busca, setBusca] = useState("");
+  const [fEmpresa, setFEmpresa] = useState("Todas");
   const [fPlano, setFPlano] = useState("Todos");
   const [mesesSel, setMesesSel] = useState([]);
   const [outrosOpen, setOutrosOpen] = useState(false);
@@ -704,7 +705,24 @@ useEffect(() => {
 
   const planos = useMemo(() => ["Todos", ...Array.from(new Set(rows.map((r) => r.plano))).sort()], [rows]);
 
-  const planosSomente = useMemo(() => planos.filter((p) => p !== "Todos"), [planos]);
+  
+  const empresas = useMemo(() => ["Todas", ...Array.from(new Set(rows.map((r) => r.empresa).filter(Boolean))).sort()], [rows]);
+
+  const sugestoesBusca = useMemo(() => {
+    const s = new Set();
+    for (const r of rows) {
+      if (r?.plano) s.add(String(r.plano));
+      if (r?.conta) s.add(String(r.conta));
+      if (r?.fornecedor) s.add(String(r.fornecedor));
+      if (r?.empresa) s.add(String(r.empresa));
+      if (r?.centro_custo) s.add(String(r.centro_custo));
+      if (r?.centroCusto) s.add(String(r.centroCusto));
+      if (r?.cc) s.add(String(r.cc));
+    }
+    return Array.from(s).sort();
+  }, [rows]);
+
+const planosSomente = useMemo(() => planos.filter((p) => p !== "Todos"), [planos]);
 
   const budgetList = useMemo(() => {
     const q = String(budgetQuery || "").trim().toLowerCase();
@@ -782,6 +800,7 @@ const clearAllBudgets = () => {
 
     return rows.filter((r) => {
       const matchPlano = fPlano === "Todos" || r.plano === fPlano;
+      const matchEmpresa = fEmpresa === "Todas" || r.empresa === fEmpresa;
 
       const matchBusca =
         !q ||
@@ -797,9 +816,9 @@ const clearAllBudgets = () => {
         matchMes = mesesSel.includes(mi);
       }
 
-      return matchPlano && matchBusca && matchMes;
+      return matchPlano && matchEmpresa && matchBusca && matchMes;
     });
-  }, [rows, busca, fPlano, mesesSel]);
+  }, [rows, busca, fPlano, fEmpresa, mesesSel]);
 
   const debugDatas = useMemo(() => {
     const ok = filtered.filter((r) => !!r.data).length;
@@ -1425,53 +1444,65 @@ const outrosPlanos = useMemo(() => {
             </div>
           }
         >
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <div>
-              <div className="text-[11px] text-white/60 mb-1">Busca (plano, conta, fornecedor...)</div>
-              <input
-                value={busca}
-                onChange={(e) => setBusca(e.target.value)}
-                placeholder="Digite para filtrar..."
-                className="w-full rounded-lg px-3 py-2 bg-white/5 border border-white/10 text-white placeholder:text-white/40 outline-none focus:ring-2 focus:ring-sky-500/40"
-                disabled={!rows.length}
-              />
-            </div>
+          <div className="space-y-3">
+            <div className="flex flex-wrap items-end gap-3">
+              <div className="flex-1 min-w-[320px]">
+                <div className="text-[11px] text-white/60 mb-1">Busca (plano, conta, fornecedor...)</div>
+                <input
+                  value={busca}
+                  onChange={(e) => setBusca(e.target.value)}
+                  list="busca-sugestoes"
+                  placeholder="Digite para filtrar..."
+                  className="w-full rounded-lg px-3 py-2 bg-white/5 border border-white/10 text-white placeholder:text-white/40 outline-none focus:ring-2 focus:ring-sky-500/40"
+                  disabled={!rows.length}
+                />
+                <datalist id="busca-sugestoes">
+                  {sugestoesBusca.slice(0, 5000).map((v) => (
+                    <option key={v} value={v} />
+                  ))}
+                </datalist>
+              </div>
 
-            <div>
-              <div className="text-[11px] text-white/60 mb-1">Plano</div>
-              <select
-                value={fPlano}
-                onChange={(e) => setFPlano(e.target.value)}
-                className="w-full rounded-lg bg-[#0B1220] text-white border border-white/20 px-3 py-2 outline-none focus:ring-2 focus:ring-sky-500/40"
-                disabled={!rows.length}
-              >
-                {planos.map((p) => {
-                  const st = p !== "Todos" ? planoStatusMap?.[p] : null;
-                  const label = p === "Todos" ? "Todos" : `${st?.emoji ?? "⚪"} ${p}`;
-                  return (
-                    <option key={p} value={p} className="text-black bg-white">
-                      {label}
+              <div className="w-[260px] min-w-[220px]">
+                <div className="text-[11px] text-white/60 mb-1">Empresa</div>
+                <select
+                  value={fEmpresa}
+                  onChange={(e) => setFEmpresa(e.target.value)}
+                  className="w-full rounded-lg bg-[#0B1220] text-white border border-white/20 px-3 py-2 outline-none focus:ring-2 focus:ring-sky-500/40"
+                  disabled={!rows.length}
+                >
+                  {empresas.map((e) => (
+                    <option key={e} value={e} className="text-black bg-white">
+                      {e}
                     </option>
-                  );
-                })}
-              </select>
+                  ))}
+                </select>
+              </div>
+
+              <div className="w-[280px] min-w-[220px]">
+                <div className="text-[11px] text-white/60 mb-1">Plano</div>
+                <select
+                  value={fPlano}
+                  onChange={(e) => setFPlano(e.target.value)}
+                  className="w-full rounded-lg bg-[#0B1220] text-white border border-white/20 px-3 py-2 outline-none focus:ring-2 focus:ring-sky-500/40"
+                  disabled={!rows.length}
+                >
+                  {planos.map((p) => {
+                    const st = p !== "Todos" ? planoStatusMap?.[p] : null;
+                    const label = p === "Todos" ? "Todos" : `${st?.emoji ?? "⚪"} ${p}`;
+                    return (
+                      <option key={p} value={p} className="text-black bg-white">
+                        {label}
+                      </option>
+                    );
+                  })}
+                </select>
+              </div>
             </div>
 <div className="md:col-span-2">
               <div className="text-[11px] text-white/60 mb-1">Meses (Vencimento)</div>
-            <div className="mt-3 flex items-center gap-3 flex-wrap">
-              <div className="text-xs text-white/60 whitespace-nowrap">Corte p/ “Outros”</div>
-              <input
-                type="range"
-                min={0}
-                max={10}
-                step={0.5}
-                value={cutoffPct}
-                onChange={(e) => setCutoffPct(Number(e.target.value))}
-                className="w-52 accent-white"
-              />
-              <div className="text-xs text-white/80 w-12 text-right">{cutoffPct.toFixed(1)}%</div>
-              <div className="text-xs text-white/50">Agrupa planos com participação menor que o corte.</div>
-            </div>
+            
+
 
               <div className="flex flex-wrap gap-2">
                 {MESES_LABEL.map((m, idx) => {
@@ -1509,6 +1540,23 @@ const outrosPlanos = useMemo(() => {
                     Limpar meses
                   </button>
                 )}
+              
+
+                <div className="flex items-center gap-3 flex-wrap">
+              <div className="text-xs text-white/60 whitespace-nowrap">Corte p/ “Outros”</div>
+              <input
+                type="range"
+                min={0}
+                max={10}
+                step={0.5}
+                value={cutoffPct}
+                onChange={(e) => setCutoffPct(Number(e.target.value))}
+                className="w-52 accent-white"
+              />
+              <div className="text-xs text-white/80 w-12 text-right">{cutoffPct.toFixed(1)}%</div>
+              <div className="text-xs text-white/50">Agrupa planos com participação menor que o corte.</div>
+            </div>
+
               </div>
             </div>
 
