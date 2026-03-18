@@ -1556,53 +1556,158 @@ const [planSkuQuery, setPlanSkuQuery] = useState("");
     return list.slice(0, 20);
   }, [statsPorSku, skuMeta]);
 
-  const sugestaoMinimo = useMemo(() => {
-    const list = [];
-    for (const [sku, st] of statsPorSku.entries()) {
-      let base = 0;
-      switch (minMethod) {
-        case "media17":
-          base = st.mean;
-          break;
-        case "max17":
-          base = st.maxv;
-          break;
-        case "p85":
-          base = st.p85;
-          break;
-        case "media+1sigma":
-          base = st.mean + st.sigma;
-          break;
-        default:
-          base = st.mean;
+  
+const statsPorSkuCidade = useMemo(() => {
+    const map = new Map();
+    for (const r of salesRows) {
+      const sku = r.CodigoProduto;
+      const cidade = (r.Cidade || "").trim();
+      if (!sku || !cidade) continue;
+      if (!map.has(sku)) map.set(sku, new Map());
+      const byCity = map.get(sku);
+      if (!byCity.has(cidade)) byCity.set(cidade, []);
+      byCity.get(cidade).push(Number(r.QtdVendida || 0));
+    }
+
+    const out = new Map();
+    for (const [sku, byCity] of map.entries()) {
+      const inner = new Map();
+      for (const [cidade, arrRaw] of byCity.entries()) {
+        const arr = (arrRaw || []).map((v) => Number(v || 0));
+        const n = arr.length;
+        const sum = arr.reduce((s, x) => s + x, 0);
+        const mean = n ? sum / n : 0;
+        const maxv = n ? Math.max(...arr) : 0;
+        const p85 = percentile(arr, 85);
+        let sigma = 0;
+        if (n > 1) {
+          const varS =
+            arr.reduce((s, x) => s + Math.pow(x - mean, 2), 0) /
+            (n - 1);
+          sigma = Math.sqrt(varS);
+        }
+        inner.set(cidade, { n, mean, maxv, p85, sigma });
       }
-      const sugerido = Math.max(
-        0,
-        Math.ceil((base || 0) * (Number(covFactor) || 1))
-      );
+      out.set(sku, inner);
+    }
+    return out;
+  }, [salesRows]);
+
+  const sugestaoMinimoPorCidade = useMemo(() => {
+    const list = [];
+    const BASE_CYCLE_DAYS = 365 / 17;
+
+    for (const [sku, byCity] of statsPorSkuCidade.entries()) {
       let desc = skuMeta.get(sku) || "";
       if (!desc || desc.trim() === "") desc = `SKU ${sku}`;
-      list.push({
-        SKU: sku,
-        Descricao: desc,
-        CiclosUsados: st.n,
-        EstoqueMinimoSugerido: sugerido,
-      });
+
+      for (const [cidade, st] of byCity.entries()) {
+        let base = 0;
+        switch (minMethod) {
+          case "max17":
+            base = st.maxv;
+            break;
+          case "p85":
+            base = st.p85;
+            break;
+          case "media+1sigma":
+            base = st.mean + st.sigma;
+            break;
+          case "conservador":
+            base = st.p85;
+            break;
+          case "agressivo":
+            base = st.mean;
+            break;
+          case "neutro":
+          case "media17":
+          default:
+            base = st.mean;
+        }
+
+        const classe = skuClasse.get(sku) || "";
+        const days = planDaysByCityCurve(cidade, classe);
+        const horizonFactor = days > 0 ? days / BASE_CYCLE_DAYS : 1;
+
+        const sugerido = Math.max(
+          0,
+          Math.ceil((base || 0) * horizonFactor * (Number(covFactor) || 1))
+        );
+
+        list.push({
+          SKU: sku,
+          Descricao: desc,
+          Cidade: cidade,
+          Classe: classe,
+          Categoria: skuCategoria.get(sku) || "",
+          CiclosUsados: st.n,
+          MediaCiclos: Number((st.mean || 0).toFixed(2)),
+          PicoCiclos: st.maxv || 0,
+          EstoqueMinimoSugerido: sugerido,
+        });
+      }
     }
+
+    list.sort((a, b) => {
+      if ((b.EstoqueMinimoSugerido || 0) !== (a.EstoqueMinimoSugerido || 0)) {
+        return (b.EstoqueMinimoSugerido || 0) - (a.EstoqueMinimoSugerido || 0);
+      }
+      if ((a.SKU || "") !== (b.SKU || "")) {
+        return String(a.SKU || "").localeCompare(String(b.SKU || ""));
+      }
+      return String(a.Cidade || "").localeCompare(String(b.Cidade || ""));
+    });
+
+    return list;
+  }, [statsPorSkuCidade, minMethod, covFactor, skuMeta, skuClasse, skuCategoria]);
+
+  const targetsBySkuCity = useMemo(() => {
+    const map = new Map();
+    for (const r of sugestaoMinimoPorCidade) {
+      const sku = String(r.SKU || "").trim();
+      const cidade = String(r.Cidade || "").trim();
+      if (!sku || !cidade) continue;
+      if (!map.has(sku)) map.set(sku, new Map());
+      map.get(sku).set(cidade, Math.max(0, Number(r.EstoqueMinimoSugerido || 0)));
+    }
+    return map;
+  }, [sugestaoMinimoPorCidade]);
+
+  const sugestaoMinimo = useMemo(() => {
+    const bySku = new Map();
+
+    for (const r of sugestaoMinimoPorCidade) {
+      const sku = r.SKU;
+      if (!bySku.has(sku)) {
+        bySku.set(sku, {
+          SKU: sku,
+          Descricao: r.Descricao,
+          CiclosUsados: r.CiclosUsados || 0,
+          EstoqueMinimoSugerido: 0,
+        });
+      }
+      const acc = bySku.get(sku);
+      acc.EstoqueMinimoSugerido += Number(r.EstoqueMinimoSugerido || 0);
+      acc.CiclosUsados = Math.max(acc.CiclosUsados || 0, r.CiclosUsados || 0);
+      if (!acc.Descricao && r.Descricao) acc.Descricao = r.Descricao;
+    }
+
+    const list = Array.from(bySku.values());
     list.sort(
       (a, b) => b.EstoqueMinimoSugerido - a.EstoqueMinimoSugerido
     );
     return list;
-  }, [statsPorSku, minMethod, covFactor, skuMeta]);
+  }, [sugestaoMinimoPorCidade]);
 
   const minChartData = useMemo(
     () =>
-      sugestaoMinimo.slice(0, 20).map((r) => ({
+      sugestaoMinimoPorCidade.slice(0, 20).map((r) => ({
         SKU: r.SKU,
-        Label: `${r.SKU} — ${r.Descricao}`,
+        Cidade: r.Cidade,
+        Label: `${r.SKU} — ${r.Descricao} — ${r.Cidade}`,
         Min: r.EstoqueMinimoSugerido,
       })),
-    [sugestaoMinimo]
+    [sugestaoMinimoPorCidade]
   );
 
   const salesShareCity = useMemo(() => {
@@ -1715,47 +1820,43 @@ const [planSkuQuery, setPlanSkuQuery] = useState("");
     return ["Todas", ...Array.from(set).sort((a, b) => a.localeCompare(b))];
   }, [sugestaoMinimo, skuCategoria]);
 
-  const minCityOptions = useMemo(() => cityOptions, [cityOptions]);
+  
+const minCityOptions = useMemo(() => cityOptions, [cityOptions]);
 
 const sugestaoMinimoView = useMemo(() => {
-    return sugestaoMinimo.filter((r) => {
-      // Filtro por categoria
+    return sugestaoMinimoPorCidade.filter((r) => {
       if (minCategoryFilter !== "Todas") {
-        const cat = skuCategoria.get(r.SKU) || "";
+        const cat = r.Categoria || skuCategoria.get(r.SKU) || "";
         if (cat !== minCategoryFilter) return false;
       }
 
-      // Filtro por curva
       if (minCurveFilter !== "Todas") {
-        const cls = skuClasse.get(r.SKU) || "";
+        const cls = r.Classe || skuClasse.get(r.SKU) || "";
         if (cls !== minCurveFilter) return false;
       }
 
-      // Filtro por cidade (SKU precisa ter participação na cidade)
       if (minCityFilter !== "Todas") {
-        const share = salesShareCity.get(r.SKU);
-        if (!share || !share.has(minCityFilter)) return false;
+        if ((r.Cidade || "") !== minCityFilter) return false;
       }
 
-      // Filtro por SKU/Descrição (texto)
       if (minSkuQuery.trim()) {
         const q = normText(minSkuQuery);
         const skuStr = normText(r.SKU || r.CodigoProduto || "");
         const descStr = normText(r.Descricao || r.DescricaoProduto || "");
-        if (!skuStr.includes(q) && !descStr.includes(q)) return false;
+        const cityStr = normText(r.Cidade || "");
+        if (!skuStr.includes(q) && !descStr.includes(q) && !cityStr.includes(q)) return false;
       }
 
       return true;
     });
   }, [
-    sugestaoMinimo,
+    sugestaoMinimoPorCidade,
     minCategoryFilter,
     minCurveFilter,
     minCityFilter,
     minSkuQuery,
     skuCategoria,
     skuClasse,
-    salesShareCity,
   ]);
 
   const minSkuSuggestions = useMemo(() => {
@@ -1766,10 +1867,11 @@ const sugestaoMinimoView = useMemo(() => {
     for (const r of sugestaoMinimoView || []) {
       const sku = String(r.SKU ?? r.CodigoProduto ?? "").trim();
       const desc = String(r.Descricao ?? r.DescricaoProduto ?? "").trim();
+      const cidade = String(r.Cidade ?? "").trim();
       if (!sku) continue;
-      const label = desc ? `${sku} — ${desc}` : sku;
-      if (normText(label).includes(q) && !seen.has(sku)) {
-        seen.add(sku);
+      const label = cidade ? `${sku} — ${desc} — ${cidade}` : (desc ? `${sku} — ${desc}` : sku);
+      if (normText(label).includes(q) && !seen.has(label)) {
+        seen.add(label);
         out.push(label);
         if (out.length >= 50) break;
       }
@@ -1777,12 +1879,12 @@ const sugestaoMinimoView = useMemo(() => {
     return out;
   }, [minSkuQuery, sugestaoMinimoView]);
 
-
   const minChartDataView = useMemo(
     () =>
       sugestaoMinimoView.slice(0, 20).map((r) => ({
         SKU: r.SKU,
-        Label: `${r.SKU} — ${r.Descricao}`,
+        Cidade: r.Cidade,
+        Label: `${r.SKU} — ${r.Descricao} — ${r.Cidade}`,
         Min: r.EstoqueMinimoSugerido,
       })),
     [sugestaoMinimoView]
@@ -2220,23 +2322,13 @@ const sugestaoMinimoView = useMemo(() => {
 
       const cicloDes = skuDesativacao.get(sku) ?? null;
 
-      // OPÇÃO 4 – filtro de exibição por desativação
       if (planDesativMode === "somente_ativos") {
-        // só entra SKU sem desativação ou com desativação após o ciclo atual
         if (cicloDes != null && cicloDes <= CURRENT_CYCLE) continue;
       } else if (planDesativMode === "ate_ciclo_atual") {
-        // só SKUs que desativam até o ciclo atual
         if (cicloDes == null || cicloDes > CURRENT_CYCLE) continue;
       } else if (planDesativMode === "ate_prox_ciclo") {
-        // só SKUs que desativam até o próximo ciclo
         if (cicloDes == null || cicloDes > CURRENT_CYCLE + 1) continue;
       }
-
-      const baseGlobalMin = rec.EstoqueMinimoSugerido || 0;
-      const globalMin = Math.max(
-        0,
-        Math.round(baseGlobalMin * horizonFactor)
-      );
 
       const classe = skuClasse.get(sku) || "";
       if (planCurveFilter !== "Todas" && classe !== planCurveFilter) {
@@ -2254,60 +2346,49 @@ const sugestaoMinimoView = useMemo(() => {
       const citiesMap = estoqueBySkuCity.get(sku);
       if (!citiesMap || !citiesMap.size) continue;
 
-      // Ponderação por vendas por cidade (ou igualitário)
-      let weights = new Map();
-      if (salesShareCity.has(sku) && salesShareCity.get(sku).size) {
-        const shares = salesShareCity.get(sku);
-        let sum = 0;
-        for (const city of citiesMap.keys()) {
-          const w = shares.get(city) || 0;
-          weights.set(city, w);
-          sum += w;
-        }
-        if (sum === 0) {
-          const count = citiesMap.size;
-          for (const city of citiesMap.keys()) {
-            weights.set(city, 1 / count);
-          }
-        } else {
-          for (const [city, w] of Array.from(weights.entries())) {
-            weights.set(city, w / sum);
-          }
-        }
-      } else {
-        const count = citiesMap.size;
-        for (const city of citiesMap.keys()) {
-          weights.set(city, 1 / count);
-        }
+      const detailTargets = targetsBySkuCity.get(sku) || new Map();
+      const cityTargets = new Map();
+
+      for (const city of citiesMap.keys()) {
+        const baseTarget = Math.max(0, Number(detailTargets.get(city) || 0));
+        cityTargets.set(
+          city,
+          Math.max(0, Math.round(baseTarget * horizonFactor))
+        );
       }
 
-      // Distribuição do mínimo por cidade
-      const cities = Array.from(citiesMap.keys());
-      const targets = new Map();
-      let assigned = 0;
-      cities.forEach((city, idx) => {
-        let t = Math.floor(globalMin * (weights.get(city) || 0));
-        if (idx === cities.length - 1) {
-          t = Math.max(0, globalMin - assigned);
-        }
-        targets.set(city, t);
-        assigned += t;
-      });
+      const globalMin = Array.from(cityTargets.values()).reduce(
+        (s, v) => s + (v || 0),
+        0
+      );
+
+      const totalEstoqueAtualSku = Array.from(citiesMap.values()).reduce(
+        (s, acc) => s + Math.max(0, acc?.EstoqueAtual || 0),
+        0
+      );
 
       const sources = [];
       const sinks = [];
 
       for (const [city, acc] of citiesMap.entries()) {
-        const available =
-          (acc.EstoqueAtual || 0) +
-          (acc.EstoqueTransito || 0) -
-          (acc.PendLiq || 0);
-        const target = targets.get(city) || 0;
-        const diff = available - target;
+        const estoqueAtual = Math.max(0, acc.EstoqueAtual || 0);
+        const estoqueTransito = Math.max(0, acc.EstoqueTransito || 0);
+        const pendLiq = Math.max(0, acc.PendLiq || 0);
+        const target = cityTargets.get(city) || 0;
 
-        // CENÁRIO SEM TRANSFERÊNCIA -> tudo que faltar, eu compraria
-        if (diff < 0) {
-          const needed = -diff;
+        const availableFuture = Math.max(
+          0,
+          estoqueAtual + estoqueTransito - pendLiq
+        );
+
+        const needed = Math.max(0, target - availableFuture);
+
+        const transferable =
+          estoqueAtual > target && totalEstoqueAtualSku > globalMin
+            ? Math.max(0, estoqueAtual - target)
+            : 0;
+
+        if (needed > 0) {
           const priceMap = skuPrecoCidade.get(sku);
           const valorUnitBase = priceMap?.get(city) || 0;
           const valorTotalBase = valorUnitBase * needed;
@@ -2316,35 +2397,32 @@ const sugestaoMinimoView = useMemo(() => {
           baseBuyValor += valorTotalBase;
 
           sinks.push({ city, qty: needed });
-        } else if (diff > 0) {
-          sources.push({ city, qty: diff });
+        } else if (transferable > 0) {
+          sources.push({ city, qty: transferable });
         }
       }
 
-      // CENÁRIO COM TRANSFERÊNCIAS -> primeiro tenta cobrir com quem tem sobra
       let i = 0;
       let j = 0;
-            if (applyTransfers) {
+      if (applyTransfers && totalEstoqueAtualSku > globalMin) {
         while (i < sources.length && j < sinks.length) {
-                const give = Math.min(sources[i].qty, sinks[j].qty);
-                if (give > 0) {
-                  transfers.push({
-                    SKU: sku,
-                    Descricao: desc,
-                    Origem: sources[i].city,
-                    Destino: sinks[j].city,
-                    Qtd: give,
-                  });
-                  totalTransfer += give;
-                  moves += 1;
-                }
-                sources[i].qty -= give;
-                sinks[j].qty -= give;
-                if (sources[i].qty === 0) i++;
-                if (sinks[j].qty === 0) j++;
-              }
-
-      
+          const give = Math.min(sources[i].qty, sinks[j].qty);
+          if (give > 0) {
+            transfers.push({
+              SKU: sku,
+              Descricao: desc,
+              Origem: sources[i].city,
+              Destino: sinks[j].city,
+              Qtd: give,
+            });
+            totalTransfer += give;
+            moves += 1;
+          }
+          sources[i].qty -= give;
+          sinks[j].qty -= give;
+          if (sources[i].qty === 0) i++;
+          if (sinks[j].qty === 0) j++;
+        }
       }
 
 // O que ainda falta depois das transferências -> compra
@@ -2433,7 +2511,7 @@ const sugestaoMinimoView = useMemo(() => {
   }, [
     sugestaoMinimo,
     estoqueBySkuCity,
-    salesShareCity,
+    targetsBySkuCity,
     skuClasse,
     skuCategoria,
     skuPrecoCidade,
@@ -3634,12 +3712,12 @@ function exportMinimoXlsx() {
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-2 mb-2">
             <Kpi
-              title="Top 1 Estoque Mínimo"
+              title="Top 1 mínimo por loja"
               value={sugestaoMinimoView[0]?.EstoqueMinimoSugerido || 0}
               color={C_GREEN}
             />
             <Kpi
-              title="Top 5 (soma)"
+              title="Top 5 lojas (soma)"
               value={sugestaoMinimoView
                 .slice(0, 5)
                 .reduce(
@@ -3649,7 +3727,7 @@ function exportMinimoXlsx() {
               color={C_BLUE}
             />
             <Kpi
-              title="Qtd SKUs com mínimo > 0"
+              title="Qtd linhas loja com mínimo > 0"
               value={
                 sugestaoMinimoView.filter(
                   (r) => (r.EstoqueMinimoSugerido || 0) > 0
@@ -3714,6 +3792,7 @@ function exportMinimoXlsx() {
                     {[
                       "SKU",
                       "Descrição",
+                      "Cidade",
                       "Ciclos usados",
                       "Mínimo sugerido",
                     ].map((h) => (
@@ -3729,7 +3808,7 @@ function exportMinimoXlsx() {
                 <tbody>
                   {sugestaoMinimoView.map((r) => (
                     <tr
-                      key={r.SKU}
+                      key={`${r.SKU}-${r.Cidade}`}
                       className="border-t"
                       style={{ borderColor: C_CARD_BORDER }}
                     >
@@ -3738,6 +3817,9 @@ function exportMinimoXlsx() {
                       </td>
                       <td className="px-3 py-2">
                         {r.Descricao}
+                      </td>
+                      <td className="px-3 py-2 whitespace-nowrap">
+                        {r.Cidade}
                       </td>
                       <td className="px-3 py-2 text-right">
                         {r.CiclosUsados}
