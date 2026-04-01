@@ -513,6 +513,170 @@ async function parseXlsxSmart(file) {
   };
 }
 
+
+const BUDGET_EMPRESA_LS_KEY = "bi_service_rateio_budget_empresa_v1";
+
+function pad2(n) {
+  return String(Number(n) || 0).padStart(2, "0");
+}
+
+const BUDGET_COMPANY_NAME_MAP = {
+  PITANGUEIRAS: "PITANGEURAS",
+};
+
+function normalizeCompanyNameBudget(v) {
+  const raw = String(v ?? "").trim().toUpperCase();
+  const base = BUDGET_COMPANY_NAME_MAP[raw] || raw;
+  return base
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim()
+    .toUpperCase();
+}
+
+function monthIndexFromNameBR(v) {
+  const s = String(v ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toUpperCase()
+    .trim();
+
+  const map = {
+    JANEIRO: 1, FEVEREIRO: 2, MARCO: 3, ABRIL: 4, MAIO: 5, JUNHO: 6,
+    JULHO: 7, AGOSTO: 8, SETEMBRO: 9, OUTUBRO: 10, NOVEMBRO: 11, DEZEMBRO: 12,
+    JAN: 1, FEV: 2, MAR: 3, ABR: 4, MAI: 5, JUN: 6, JUL: 7, AGO: 8, SET: 9, OUT: 10, NOV: 11, DEZ: 12,
+  };
+  return map[s] || null;
+}
+
+async function parseBudgetReceitaXlsx(file) {
+  const mod = await import("xlsx");
+  const XLSX = mod.default ?? mod;
+  const buf = await file.arrayBuffer();
+  const wb = XLSX.read(buf, { type: "array", cellDates: true });
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  const matrix = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "", raw: true });
+
+  const headerRow = matrix.find((r) => String(r?.[0] ?? "").toUpperCase().includes("MÊS") || String(r?.[0] ?? "").toUpperCase().includes("MES")) || [];
+  const headerIdx = matrix.indexOf(headerRow);
+  const yearMatch = String(file?.name || "").match(/(20\d{2})/);
+  const year = Number(yearMatch?.[1]) || new Date().getFullYear();
+
+  const companies = headerRow.slice(1).map((c) => normalizeCompanyNameBudget(c)).filter(Boolean);
+  const entries = {};
+
+  for (const c of companies) entries[c] = {};
+
+  for (const row of matrix.slice(headerIdx + 1)) {
+    const month = monthIndexFromNameBR(row?.[0]);
+    if (!month) continue;
+    const mes = `${year}-${pad2(month)}`;
+    for (let i = 1; i < headerRow.length; i++) {
+      const company = normalizeCompanyNameBudget(headerRow[i]);
+      if (!company) continue;
+      entries[company][mes] = Math.abs(toNumberBR(row?.[i]));
+    }
+  }
+
+  return { year, companies, entries, filename: file?.name || "" };
+}
+
+async function parseBudgetDreXlsx(file) {
+  const mod = await import("xlsx");
+  const XLSX = mod.default ?? mod;
+  const buf = await file.arrayBuffer();
+  const wb = XLSX.read(buf, { type: "array", cellDates: true });
+  const ws = wb.Sheets["DRE"] || wb.Sheets[wb.SheetNames[0]];
+  const matrix = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "", raw: true });
+
+  const header = matrix[0] || [];
+  const monthCols = [];
+  for (let i = 1; i < header.length; i++) {
+    const m = String(header[i] ?? "").match(/^(\d{2})\/(\d{4})$/);
+    if (m) monthCols.push({ idx: i, month: Number(m[1]), year: Number(m[2]) });
+  }
+
+  const company = normalizeCompanyNameBudget(String(file?.name || "").replace(/\.[^.]+$/, ""));
+  const entries = [];
+
+  for (const row of matrix.slice(1)) {
+    const rawName = String(row?.[0] ?? "").trim();
+    if (!rawName) continue;
+
+    for (const mc of monthCols) {
+      const valor = Math.abs(toNumberBR(row?.[mc.idx]));
+      if (!valor) continue;
+      entries.push({
+        empresa: company,
+        month: mc.month,
+        sourceYear: mc.year,
+        plano: rawName,
+        planoKey: normKey(rawName),
+        valor,
+      });
+    }
+  }
+
+  return { company, entries, filename: file?.name || "" };
+}
+
+function buildBudgetEmpresaPayload(receitaData, dreDataList) {
+  const year = Number(receitaData?.year) || new Date().getFullYear();
+  const entries = {};
+  const unmatched = new Set();
+
+  for (const dre of dreDataList || []) {
+    const company = normalizeCompanyNameBudget(dre?.company);
+    const receitaByMonth = receitaData?.entries?.[company];
+    if (!receitaByMonth) {
+      unmatched.add(company);
+      continue;
+    }
+
+    for (const item of dre.entries || []) {
+      const mes = `${year}-${pad2(item.month)}`;
+      const receita = Math.abs(toNumberBR(receitaByMonth?.[mes]));
+      if (!receita) continue;
+
+      const pct = (Number(item.valor) || 0) / receita;
+      const previsto = receita * pct;
+      const key = `${company}|${normKey(item.plano)}`;
+
+      const prev = entries[key] || {
+        empresa: company,
+        plano: item.plano,
+        planoKey: normKey(item.plano),
+        totalPrevisto: 0,
+        months: {},
+      };
+
+      prev.totalPrevisto += previsto;
+      prev.months[mes] = {
+        receita,
+        pct,
+        previsto,
+        valorDreBase: Number(item.valor) || 0,
+      };
+
+      entries[key] = prev;
+    }
+  }
+
+  return {
+    year,
+    entries,
+    summary: {
+      year,
+      empresas: Array.from(new Set(Object.values(entries).map((x) => x.empresa))).sort(),
+      planos: Array.from(new Set(Object.values(entries).map((x) => x.plano))).sort(),
+      combinacoes: Object.keys(entries).length,
+      unmatchedCompanies: Array.from(unmatched),
+      receitaFile: receitaData?.filename || "",
+      dreFiles: (dreDataList || []).map((x) => x.filename || ""),
+    },
+  };
+}
+
 export default function DashboardRateioUploadInteligentePage() {
   const inputRef = useRef(null);
 
@@ -540,6 +704,71 @@ export default function DashboardRateioUploadInteligentePage() {
   // UI state (permite digitar vírgula/ponto sem o input "pular")
   const [budgetUi, setBudgetUi] = useState({}); 
   const budgetsSeededRef = useRef(false);
+
+  const receitaBudgetInputRef = useRef(null);
+  const dreBudgetInputRef = useRef(null);
+  const [budgetStandalone, setBudgetStandalone] = useState(false);
+  const [budgetReceitaFile, setBudgetReceitaFile] = useState(null);
+  const [budgetDreFiles, setBudgetDreFiles] = useState([]);
+  const [budgetEmpresaLoading, setBudgetEmpresaLoading] = useState(false);
+  const [budgetEmpresaError, setBudgetEmpresaError] = useState("");
+  const [budgetEmpresaData, setBudgetEmpresaData] = useState({ year: null, entries: {}, summary: null });
+  const [budgetPersistTick, setBudgetPersistTick] = useState(0);
+  const [budgetEmpresaHydrated, setBudgetEmpresaHydrated] = useState(false);
+
+  const generatedBudgetAvailable = useMemo(
+    () => Object.keys(budgetEmpresaData?.entries || {}).length > 0,
+    [budgetEmpresaData]
+  );
+
+  const selectedMonthKeys = useMemo(() => {
+    if (!mesesSel?.length) return null;
+    return new Set(mesesSel.slice().sort((a, b) => a - b).map((mi) => String(mi + 1).padStart(2, "0")));
+  }, [mesesSel]);
+
+  const generatedBudgetValueForPlano = (plano, empresaFiltro = "Todas", monthKeySet = null) => {
+    const key = normKey(plano);
+    let total = 0;
+    for (const item of Object.values(budgetEmpresaData?.entries || {})) {
+      if (normKey(item?.plano) !== key) continue;
+      if (empresaFiltro !== "Todas" && String(item?.empresa) !== String(empresaFiltro)) continue;
+      for (const [mes, mm] of Object.entries(item?.months || {})) {
+        const mesNum = String(mes).split("-")[1] || "";
+        if (monthKeySet && !monthKeySet.has(mesNum)) continue;
+        total += Number(mm?.previsto || 0);
+      }
+    }
+    return total;
+  };
+
+  const generatedBudgetTotal = useMemo(() => {
+    if (!generatedBudgetAvailable) return 0;
+    let total = 0;
+    for (const item of Object.values(budgetEmpresaData?.entries || {})) {
+      if (fEmpresa !== "Todas" && String(item?.empresa) !== String(fEmpresa)) continue;
+      for (const [mes, mm] of Object.entries(item?.months || {})) {
+        const mesNum = String(mes).split("-")[1] || "";
+        if (selectedMonthKeys && !selectedMonthKeys.has(mesNum)) continue;
+        total += Number(mm?.previsto || 0);
+      }
+    }
+    return total;
+  }, [generatedBudgetAvailable, budgetEmpresaData, fEmpresa, selectedMonthKeys]);
+
+  const generatedBudgetByMes = useMemo(() => {
+    const map = new Map();
+    if (!generatedBudgetAvailable) return map;
+    for (const item of Object.values(budgetEmpresaData?.entries || {})) {
+      if (fEmpresa !== "Todas" && String(item?.empresa) !== String(fEmpresa)) continue;
+      for (const [mes, mm] of Object.entries(item?.months || {})) {
+        const mesNum = String(mes).split("-")[1] || "";
+        if (selectedMonthKeys && !selectedMonthKeys.has(mesNum)) continue;
+        map.set(mes, (map.get(mes) || 0) + Number(mm?.previsto || 0));
+      }
+    }
+    return map;
+  }, [generatedBudgetAvailable, budgetEmpresaData, fEmpresa, selectedMonthKeys]);
+
 // { [plano]: { value?: string, pct?: string } }
 
 
@@ -635,6 +864,36 @@ useEffect(() => {
 }, []);
 
 
+  useEffect(() => {
+    try {
+      const sp = new URLSearchParams(window.location.search);
+      setBudgetStandalone(sp.get("orcamentos") === "1");
+    } catch {}
+  }, []);
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(BUDGET_EMPRESA_LS_KEY);
+      if (!raw) {
+        setBudgetEmpresaHydrated(true);
+        return;
+      }
+      const parsed = JSON.parse(raw);
+      if (parsed?.data || parsed?.meta) {
+        if (parsed?.data) setBudgetEmpresaData(parsed.data);
+        if (parsed?.meta?.receitaFile) setBudgetReceitaFile({ name: parsed.meta.receitaFile, __restored: true });
+        if (Array.isArray(parsed?.meta?.dreFiles)) {
+          setBudgetDreFiles(parsed.meta.dreFiles.map((name) => ({ name, __restored: true })));
+        }
+        setBudgetPersistTick((x) => x + 1);
+      }
+    } catch {}
+    finally {
+      setBudgetEmpresaHydrated(true);
+    }
+  }, []);
+
+
   // Persiste orçamentos
   useEffect(() => {
     try {
@@ -643,6 +902,29 @@ useEffect(() => {
       // ignore
     }
   }, [budgets]);
+
+  useEffect(() => {
+    if (!budgetEmpresaHydrated) return;
+    try {
+      const hasEntries = Object.keys(budgetEmpresaData?.entries || {}).length > 0;
+      const hasReceita = !!budgetReceitaFile?.name;
+      const hasDres = (budgetDreFiles || []).length > 0;
+      if (!hasEntries && !hasReceita && !hasDres) return;
+      localStorage.setItem(
+        BUDGET_EMPRESA_LS_KEY,
+        JSON.stringify({
+          data: budgetEmpresaData,
+          meta: {
+            receitaFile: budgetReceitaFile?.name || "",
+            dreFiles: (budgetDreFiles || []).map((f) => f?.name || String(f)),
+            summary: budgetEmpresaData?.summary || null,
+            savedAt: new Date().toLocaleString("pt-BR"),
+          },
+        })
+      );
+    } catch {}
+  }, [budgetEmpresaHydrated, budgetEmpresaData, budgetReceitaFile, budgetDreFiles]);
+
 
 
   useEffect(() => {
@@ -685,8 +967,13 @@ useEffect(() => {
 
       const normalized = await parseXlsxSmart(file);
 
-      setRows(Array.isArray(normalized?.rows) ? normalized.rows : []);
-      setFileMeta({ name: file.name, size: file.size, loadedAt: new Date().toLocaleString("pt-BR") });
+      const nextRows = Array.isArray(normalized?.rows) ? normalized.rows : [];
+      const nextMeta = { name: file.name, size: file.size, loadedAt: new Date().toLocaleString("pt-BR") };
+      setRows(nextRows);
+      setFileMeta(nextMeta);
+      try {
+        localStorage.setItem(LS_KEY, JSON.stringify({ rows: nextRows, meta: nextMeta }));
+      } catch {}
     } catch (e) {
       setError(e?.message ?? "Erro ao ler arquivo.");
     } finally {
@@ -701,6 +988,123 @@ useEffect(() => {
   }
   function onDragOver(ev) {
     ev.preventDefault();
+  }
+
+
+  
+  function persistBudgetEmpresaState() {
+    try {
+      const hasEntries = Object.keys(budgetEmpresaData?.entries || {}).length > 0;
+      const hasReceita = !!budgetReceitaFile?.name;
+      const hasDres = (budgetDreFiles || []).length > 0;
+      if (!hasEntries && !hasReceita && !hasDres) return;
+      localStorage.setItem(
+        BUDGET_EMPRESA_LS_KEY,
+        JSON.stringify({
+          data: budgetEmpresaData,
+          meta: {
+            receitaFile: budgetReceitaFile?.name || "",
+            dreFiles: (budgetDreFiles || []).map((f) => f?.name || String(f)),
+            summary: budgetEmpresaData?.summary || null,
+            savedAt: new Date().toLocaleString("pt-BR"),
+          },
+        })
+      );
+    } catch {}
+  }
+
+  function persistDashboardState() {
+    try {
+      localStorage.setItem(
+        LS_KEY,
+        JSON.stringify({
+          rows,
+          meta: fileMeta,
+        })
+      );
+    } catch {}
+  }
+
+
+  function returnToDashboardFromBudget() {
+    try {
+      persistDashboardState();
+      persistBudgetEmpresaState();
+    } catch {}
+    try {
+      if (window.opener && !window.opener.closed) {
+        try { window.opener.focus(); } catch {}
+        try { window.close(); } catch {}
+        return;
+      }
+    } catch {}
+    try {
+      window.location.href = window.location.pathname;
+    } catch {}
+  }
+
+function openBudgetManager() {
+    try {
+      persistDashboardState();
+      const url = `${window.location.pathname}?orcamentos=1`;
+      const win = window.open(url, "_blank");
+      try { win?.focus?.(); } catch {}
+    } catch {
+      setBudgetOpen(true);
+    }
+  }
+
+  async function processBudgetEmpresaFiles() {
+    setBudgetEmpresaLoading(true);
+    setBudgetEmpresaError("");
+    try {
+      if (!budgetReceitaFile) throw new Error("Selecione a planilha de receita.");
+      if (!budgetDreFiles?.length) throw new Error("Selecione os arquivos DRE das empresas.");
+
+      const restoredOnly = (budgetDreFiles || []).some((f) => f?.__restored && typeof f?.arrayBuffer !== "function");
+      if (restoredOnly) {
+        if (Object.keys(budgetEmpresaData?.entries || {}).length) {
+          throw new Error("Os DREs mostrados foram restaurados só como referência. A base processada já está salva e pode ser usada no dashboard. Reenvie os arquivos apenas se quiser recalcular.");
+        }
+        throw new Error("Os nomes dos DREs foram restaurados, mas os arquivos originais não podem ser reabertos pelo navegador. Reenvie os DREs apenas se quiser recalcular a base.");
+      }
+
+      const receitaData = await parseBudgetReceitaXlsx(budgetReceitaFile);
+      const dreDataList = [];
+      for (const f of budgetDreFiles) {
+        if (typeof f?.arrayBuffer !== "function") continue;
+        dreDataList.push(await parseBudgetDreXlsx(f));
+      }
+      const payload = buildBudgetEmpresaPayload(receitaData, dreDataList);
+      payload.summary = { ...(payload.summary || {}), savedAt: new Date().toLocaleString("pt-BR") };
+      setBudgetEmpresaData(payload);
+      try {
+        localStorage.setItem(
+          BUDGET_EMPRESA_LS_KEY,
+          JSON.stringify({
+            data: payload,
+            meta: {
+              receitaFile: budgetReceitaFile?.name || "",
+              dreFiles: (budgetDreFiles || []).map((f) => f?.name || String(f)),
+              summary: payload?.summary || null,
+              savedAt: new Date().toLocaleString("pt-BR"),
+            },
+          })
+        );
+      } catch {}
+    } catch (e) {
+      setBudgetEmpresaError(e?.message || "Erro ao processar orçamento por empresa.");
+    } finally {
+      setBudgetEmpresaLoading(false);
+    }
+  }
+
+  function clearBudgetEmpresaBase() {
+    setBudgetReceitaFile(null);
+    setBudgetDreFiles([]);
+    setBudgetEmpresaData({ year: null, entries: {}, summary: null });
+    setBudgetEmpresaError("");
+    try { localStorage.removeItem(BUDGET_EMPRESA_LS_KEY); } catch {}
   }
 
   const planos = useMemo(() => ["Todos", ...Array.from(new Set(rows.map((r) => r.plano))).sort()], [rows]);
@@ -1353,6 +1757,239 @@ const outrosPlanos = useMemo(() => {
       .sort((a, b) => (a.mes > b.mes ? 1 : -1));
   }, [drillRowsBase, byMes, drillPlano, budgets, totalGeral]);
 
+
+  const budgetEmpresaCompanies = useMemo(() => {
+    const set = new Set();
+    for (const item of Object.values(budgetEmpresaData?.entries || {})) {
+      if (item?.empresa) set.add(String(item.empresa));
+    }
+    return Array.from(set).sort();
+  }, [budgetEmpresaData]);
+
+  const budgetEmpresaRows = useMemo(() => {
+    const map = {};
+    for (const item of Object.values(budgetEmpresaData?.entries || {})) {
+      const plano = String(item?.plano || "");
+      const key = normKey(plano);
+      if (!map[key]) map[key] = { plano, values: {}, total: 0 };
+      map[key].plano = plano;
+      map[key].values[item.empresa] = Number(item.totalPrevisto || 0);
+      map[key].total += Number(item.totalPrevisto || 0);
+    }
+    const q = String(budgetQuery || "").trim().toLowerCase();
+    return Object.values(map)
+      .filter((r) => !q || String(r.plano).toLowerCase().includes(q))
+      .sort((a, b) => String(a.plano).localeCompare(String(b.plano), "pt-BR"));
+  }, [budgetEmpresaData, budgetQuery]);
+
+
+  if (budgetStandalone) {
+    return (
+      <div className="min-h-screen bg-[#0c1118] text-white">
+        <header className="sticky top-0 z-20 border-b border-white/10 bg-[#0c1118]/90 backdrop-blur px-6 py-4">
+          <div className="max-w-7xl mx-auto flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+            <div>
+              <div className="text-lg font-semibold text-white/90">Orçamento por Empresa</div>
+              <div className="text-[12px] text-white/60">
+                Carregue a receita e os DREs, gere o previsto por empresa e salve para usar no dashboard. A base processada fica salva neste computador; para consultar depois, não precisa reenviar os arquivos.
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => returnToDashboardFromBudget()}
+                className="px-3 py-2 rounded-lg text-sm border bg-white/5 border-white/10 text-white/80 hover:bg-white/10"
+              >
+                Voltar ao dashboard
+              </button>
+              <button
+                type="button"
+                onClick={() => returnToDashboardFromBudget()}
+                className="px-3 py-2 rounded-lg text-sm border bg-sky-500/20 border-sky-400/30 text-sky-100 hover:bg-sky-500/30"
+              >
+                Salvar e voltar
+              </button>
+            </div>
+          </div>
+        </header>
+
+        <main className="max-w-7xl mx-auto px-6 py-6 space-y-4">
+          <Card title="Arquivos do orçamento por empresa">
+            <div className="grid grid-cols-1 xl:grid-cols-[1.2fr_1.2fr_auto] gap-3 items-end">
+              <div>
+                <div className="text-[11px] text-white/60 mb-1">Receita mensal (xlsx)</div>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => receitaBudgetInputRef.current?.click()}
+                    className="px-3 py-2 rounded-lg text-sm border bg-white/5 border-white/10 text-white/85 hover:bg-white/10"
+                  >
+                    Selecionar receita
+                  </button>
+                  <div className="flex-1 rounded-lg px-3 py-2 bg-white/5 border border-white/10 text-sm text-white/75 truncate">
+                    {budgetReceitaFile?.name || "Nenhum arquivo selecionado"}
+                  </div>
+                </div>
+                <input
+                  ref={receitaBudgetInputRef}
+                  type="file"
+                  accept=".xlsx,.xls"
+                  className="hidden"
+                  onChange={(e) => setBudgetReceitaFile(e.target.files?.[0] || null)}
+                />
+              </div>
+
+              <div>
+                <div className="text-[11px] text-white/60 mb-1">DREs das empresas (xlsx)</div>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => dreBudgetInputRef.current?.click()}
+                    className="px-3 py-2 rounded-lg text-sm border bg-white/5 border-white/10 text-white/85 hover:bg-white/10"
+                  >
+                    Selecionar DREs
+                  </button>
+                  <div className="flex-1 rounded-lg px-3 py-2 bg-white/5 border border-white/10 text-sm text-white/75 truncate">
+                    {budgetDreFiles?.length ? `${budgetDreFiles.length} arquivo(s)` : "Nenhum arquivo selecionado"}
+                  </div>
+                </div>
+                <input
+                  ref={dreBudgetInputRef}
+                  type="file"
+                  accept=".xlsx,.xls"
+                  multiple
+                  className="hidden"
+                  onChange={(e) => setBudgetDreFiles(Array.from(e.target.files || []))}
+                />
+              </div>
+
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => processBudgetEmpresaFiles()}
+                  disabled={budgetEmpresaLoading}
+                  className="px-3 py-2 rounded-lg text-sm border bg-emerald-500/20 border-emerald-400/30 text-emerald-100 hover:bg-emerald-500/30 disabled:opacity-60"
+                >
+                  {budgetEmpresaLoading ? "Processando..." : "Gerar previsto"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => clearBudgetEmpresaBase()}
+                  className="px-3 py-2 rounded-lg text-sm border bg-white/5 border-white/10 text-white/75 hover:bg-white/10"
+                >
+                  Limpar base
+                </button>
+              </div>
+            </div>
+
+            {budgetEmpresaError && (
+              <div className="mt-3 rounded-lg border border-rose-400/20 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">
+                {budgetEmpresaError}
+              </div>
+            )}
+
+            <div className="mt-3 grid grid-cols-1 md:grid-cols-4 gap-3 text-sm">
+              <div className="rounded-xl border border-white/10 bg-black/10 p-3">
+                <div className="text-[11px] text-white/60">Receita selecionada</div>
+                <div className="text-white/85 mt-1">{budgetReceitaFile?.name || "Nenhum arquivo"}</div>
+                {budgetEmpresaData?.summary?.receitaFile && !budgetReceitaFile?.name && (
+                  <div className="text-[11px] text-white/50 mt-1">Base restaurada do armazenamento local</div>
+                )}
+              </div>
+              <div className="rounded-xl border border-white/10 bg-black/10 p-3">
+                <div className="text-[11px] text-white/60">DREs selecionados</div>
+                <div className="text-white/85 mt-1">{budgetDreFiles?.length ? `${budgetDreFiles.length} arquivo(s)` : "Nenhum arquivo"}</div>
+                {(budgetDreFiles || []).some((f) => f?.__restored) ? (
+                  <div className="text-[11px] text-white/50 mt-1">Os DREs restaurados são só referência visual. A base processada já ficou salva.</div>
+                ) : null}
+                {budgetEmpresaData?.summary?.dreFiles?.length ? (
+                  <div className="text-[11px] text-white/50 mt-1">Os nomes ficam salvos; a base usada no dashboard é a processada.</div>
+                ) : null}
+                {!!budgetEmpresaData?.summary?.dreFiles?.length && !budgetDreFiles?.length && (
+                  <div className="text-[11px] text-white/50 mt-1">Base restaurada do armazenamento local</div>
+                )}
+              </div>
+              <div className="rounded-xl border border-white/10 bg-black/10 p-3">
+                <div className="text-[11px] text-white/60">Combinações geradas</div>
+                <div className="text-white/85 mt-1">{Object.keys(budgetEmpresaData?.entries || {}).length || 0}</div>
+                {(budgetEmpresaData?.summary || budgetPersistTick) ? (
+                  <div className="text-[11px] text-emerald-200/80 mt-1">Base persistida no navegador</div>
+                ) : null}
+                {budgetEmpresaData?.summary?.combinacoes ? (
+                  <div className="text-[11px] text-white/50 mt-1">Base processada restaurável sem reenviar arquivos</div>
+                ) : null}
+              </div>
+              <div className="rounded-xl border border-white/10 bg-black/10 p-3">
+                <div className="text-[11px] text-white/60">Ano base</div>
+                <div className="text-white/85 mt-1">{budgetEmpresaData?.summary?.year || "—"}</div>
+              </div>
+            </div>
+
+            {!!budgetEmpresaData?.summary?.unmatchedCompanies?.length && (
+              <div className="mt-3 text-xs text-amber-200">
+                Empresas sem casamento entre Receita e DRE: {budgetEmpresaData.summary.unmatchedCompanies.join(", ")}
+              </div>
+            )}
+          </Card>
+
+          <Card
+            title="Previsto por plano e empresa"
+            right={
+              <div className="w-full md:w-80">
+                <input
+                  value={budgetQuery}
+                  onChange={(e) => setBudgetQuery(e.target.value)}
+                  placeholder="Buscar plano..."
+                  className="w-full rounded-lg px-3 py-2 bg-white/5 border border-white/10 text-white placeholder:text-white/40 outline-none focus:ring-2 focus:ring-sky-500/40 text-sm"
+                />
+              </div>
+            }
+          >
+            <div className="text-[11px] text-white/60 mb-3">
+              Os valores ficam salvos neste computador e você só precisa trocar os arquivos quando quiser atualizar a base.
+            </div>
+
+            <div className="rounded-xl border border-white/10 overflow-hidden">
+              <div className="max-h-[70vh] overflow-auto">
+                <table className="w-full text-[12px]">
+                  <thead className="sticky top-0 bg-[#0c1118] border-b border-white/10">
+                    <tr className="text-left">
+                      <th className="p-2 min-w-[280px]">Plano</th>
+                      {budgetEmpresaCompanies.map((empresa) => (
+                        <th key={empresa} className="p-2 min-w-[160px] text-right">{`Previsto ${empresa}`}</th>
+                      ))}
+                      <th className="p-2 min-w-[160px] text-right">Total Previsto</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {budgetEmpresaRows.map((row) => (
+                      <tr key={row.plano} className="border-b border-white/5 hover:bg-white/5">
+                        <td className="p-2 text-white/85">{row.plano}</td>
+                        {budgetEmpresaCompanies.map((empresa) => (
+                          <td key={empresa} className="p-2 text-right text-white/80">
+                            {fmtBRL(row.values?.[empresa] || 0)}
+                          </td>
+                        ))}
+                        <td className="p-2 text-right text-white font-medium">{fmtBRL(row.total || 0)}</td>
+                      </tr>
+                    ))}
+                    {!budgetEmpresaRows.length && (
+                      <tr>
+                        <td className="p-3 text-white/60 text-sm" colSpan={Math.max(2, budgetEmpresaCompanies.length + 2)}>
+                          Carregue e gere a base para visualizar o previsto por empresa.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </Card>
+        </main>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-[#0c1118] text-white">
       <header className="sticky top-0 z-20 border-b border-white/10 bg-[#0c1118]/80 backdrop-blur px-6 py-3">
@@ -1431,10 +2068,10 @@ const outrosPlanos = useMemo(() => {
           title="Filtros"
           right={
             <div className="flex items-center gap-2">
-              <div className="text-[11px] text-white/60">Busca + Plano</div>
+              <div className="text-[11px] text-white/60">Busca / Empresa / Plano</div>
               <button
                 type="button"
-                onClick={() => setBudgetOpen(true)}
+                onClick={() => openBudgetManager()}
                 className="px-2.5 py-1 rounded-lg text-[11px] border border-white/10 bg-white/5 text-white/80 hover:bg-white/10"
                 disabled={!rows.length}
                 style={{ colorScheme: "dark" }}
