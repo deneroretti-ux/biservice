@@ -2274,10 +2274,40 @@ const outrosPlanos = useMemo(() => {
     openDetailStandalone(title, rows);
   }
 
-  function openStatusPlanoDetail(plano) {
-    const planoNome = typeof plano === "string" ? plano : plano?.plano;
-    if (!planoNome) return;
-    openDrillStandalone(planoNome, "");
+  async function exportStatusTableXlsx() {
+    try {
+      const mod = await import("xlsx");
+      const XLSX = mod.default ?? mod;
+
+      const tableRows = statusPlanosFiltered
+        .map((p) => ({
+          Status: p.statusLabel || "",
+          Plano: p.plano || "",
+          Previsto: Number(p.previsto || 0),
+          Real: Number(p.real || 0),
+          "Execução %": p.previsto ? Number(p.execPct || 0) : null,
+        }));
+
+      const wb = XLSX.utils.book_new();
+      const wsTabela = XLSX.utils.json_to_sheet(
+        tableRows.length
+          ? tableRows
+          : [{ Status: "", Plano: "", Previsto: 0, Real: 0, "Execução %": null }]
+      );
+      XLSX.utils.book_append_sheet(wb, wsTabela, "Status");
+
+      const safeStatus = String(statusModalKey || "status")
+        .normalize("NFD")
+        .replace(/[̀-ͯ]/g, "")
+        .replace(/[^a-zA-Z0-9]+/g, "_")
+        .replace(/^_+|_+$/g, "")
+        .toLowerCase() || "status";
+
+      XLSX.writeFile(wb, `status_${safeStatus}_tabela.xlsx`);
+    } catch (e) {
+      console.error(e);
+      alert("Não foi possível exportar o XLSX da tabela.");
+    }
   }
 
   const drillByFornecedor = useMemo(() => aggTop(drillRows, "fornecedor", 12), [drillRows]);
@@ -2459,23 +2489,24 @@ const outrosPlanos = useMemo(() => {
         </header>
         <main className="max-w-7xl mx-auto px-6 py-6 space-y-4">
           <Card title={`Status: ${statusModalKey === "ok" ? "Dentro" : statusModalKey === "warn" ? "Atenção" : statusModalKey === "over" ? "Estourado" : "Sem orçamento"}`}>
-            <div className="mb-3">
+            <div className="mb-3 flex flex-wrap items-center gap-2">
               <input value={statusModalQuery} onChange={(e) => setStatusModalQuery(e.target.value)} placeholder="Buscar plano..." className="w-80 max-w-full rounded-xl bg-white/5 border border-white/10 px-3 py-2 text-sm text-white/80 outline-none focus:border-white/20" />
+              <button type="button" onClick={exportStatusTableXlsx} className="px-3 py-2 rounded-xl border border-white/10 bg-white/5 hover:bg-white/10 text-sm text-white/80">Exportar XLSX</button>
             </div>
             <div className="overflow-auto rounded-xl border border-white/10">
               <table className="min-w-[760px] w-full text-sm">
-                <thead className="bg-white/5 text-white/70"><tr><th className="text-left font-medium px-3 py-2">Status</th><th className="text-left font-medium px-3 py-2">Plano</th><th className="text-right font-medium px-3 py-2">Previsto</th><th className="text-right font-medium px-3 py-2">Real</th><th className="text-right font-medium px-3 py-2">Execução</th><th className="text-right font-medium px-3 py-2">Ações</th></tr></thead>
+                <thead className="bg-white/5 text-white/70"><tr><th className="text-left font-medium px-3 py-2">Status</th><th className="text-left font-medium px-3 py-2">Plano</th><th className="text-right font-medium px-3 py-2">Previsto</th><th className="text-right font-medium px-3 py-2">Real</th><th className="text-right font-medium px-3 py-2">Execução</th></tr></thead>
                 <tbody>
                   {statusPlanosFiltered.map((p) => (
                     <tr key={p.plano} className="border-t border-white/10 hover:bg-white/5">
                       <td className="px-3 py-2 text-white/80"><span className="mr-2">{p.statusEmoji}</span><span className="text-[12px]">{p.statusLabel}</span></td>
                       <td className="px-3 py-2 text-white/90">
-                        <button type="button" onClick={() => openStatusPlanoDetail(p)} className="text-left text-white/90 hover:text-sky-200 hover:underline underline-offset-4">{p.plano}</button>
+                        <span className="text-left text-white/90">{p.plano}</span>
                       </td>
                       <td className="px-3 py-2 text-right text-white/80">{p.previsto ? fmtBRL(p.previsto) : "—"}</td>
                       <td className="px-3 py-2 text-right text-white/80">{fmtBRL(p.real)}</td>
                       <td className="px-3 py-2 text-right">{p.previsto ? <span className={`${p.execPct > 100 ? "text-rose-200" : p.execPct >= 90 ? "text-amber-200" : "text-emerald-200"} font-medium`}>{p.execPct.toFixed(1)}%</span> : <span className="text-white/50">—</span>}</td>
-                      <td className="px-3 py-2 text-right"><button type="button" onClick={() => openStatusPlanoDetail(p)} className="px-3 py-1.5 rounded-xl border border-white/10 bg-white/5 hover:bg-white/10 text-[12px] text-white/80">Abrir detalhe</button></td>
+                      
                     </tr>
                   ))}
                 </tbody>
@@ -3823,6 +3854,13 @@ const outrosPlanos = useMemo(() => {
                     />
                     <button
                       type="button"
+                      onClick={exportStatusTableXlsx}
+                      className="px-3 py-2 rounded-xl border border-white/10 bg-white/5 hover:bg-white/10 text-sm text-white/80"
+                    >
+                      Exportar XLSX
+                    </button>
+                    <button
+                      type="button"
                       onClick={() => setStatusModalOpen(false)}
                       className="px-3 py-2 rounded-xl border border-white/10 bg-white/5 hover:bg-white/10 text-sm text-white/80"
                     >
@@ -3840,8 +3878,7 @@ const outrosPlanos = useMemo(() => {
                         <th className="text-right font-medium px-3 py-2">Previsto</th>
                         <th className="text-right font-medium px-3 py-2">Real</th>
                         <th className="text-right font-medium px-3 py-2">Execução</th>
-                        <th className="text-right font-medium px-3 py-2">Ações</th>
-                      </tr>
+                        </tr>
                     </thead>
                     <tbody>
                       {statusPlanosFiltered.map((p) => (
@@ -3851,14 +3888,7 @@ const outrosPlanos = useMemo(() => {
                             <span className="text-[12px]">{p.statusLabel}</span>
                           </td>
                           <td className="px-3 py-2 text-white/90">
-                            <button
-                              type="button"
-                              onClick={() => openStatusPlanoDetail(p)}
-                              className="text-left text-white/90 hover:text-sky-200 hover:underline underline-offset-4"
-                              title="Abrir detalhes do plano"
-                            >
-                              {p.plano}
-                            </button>
+                            <span className="text-left text-white/90">{p.plano}</span>
                           </td>
                           <td className="px-3 py-2 text-right text-white/80">{p.previsto ? fmtBRL(p.previsto) : "—"}</td>
                           <td className="px-3 py-2 text-right text-white/80">{fmtBRL(p.real)}</td>
@@ -3871,20 +3901,11 @@ const outrosPlanos = useMemo(() => {
                               <span className="text-white/50">—</span>
                             )}
                           </td>
-                          <td className="px-3 py-2 text-right">
-                            <button
-                              type="button"
-                              onClick={() => openStatusPlanoDetail(p)}
-                              className="px-3 py-1.5 rounded-xl border border-white/10 bg-white/5 hover:bg-white/10 text-[12px] text-white/80"
-                            >
-                              Abrir detalhe
-                            </button>
-                          </td>
                         </tr>
                       ))}
                       {!statusPlanosFiltered.length && (
                         <tr>
-                          <td colSpan={6} className="px-3 py-8 text-center text-white/60">
+                          <td colSpan={5} className="px-3 py-8 text-center text-white/60">
                             Nenhum plano encontrado para esse status.
                           </td>
                         </tr>
@@ -3894,7 +3915,7 @@ const outrosPlanos = useMemo(() => {
                 </div>
 
                 <div className="mt-3 text-[11px] text-white/50">
-                  Dica: clique em <span className="text-white/70">Abrir detalhado</span> para abrir o drill daquele plano (igual clicar na pizza).
+                  Dica: use <span className="text-white/70">Exportar XLSX</span> para baixar a tabela filtrada desse status.
                 </div>
               </div>
             </div>
