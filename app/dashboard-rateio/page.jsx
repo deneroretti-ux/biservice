@@ -525,22 +525,98 @@ function pad2(n) {
 }
 
 const BUDGET_COMPANY_NAME_MAP = {
-  PITANGUEIRAS: "PITANGEURAS",
+  CENTRO: "CENTRO",
+  COLINA: "COLINA",
+  MONTEAZUL: "MONTE AZUL",
+  MONTE_AZUL: "MONTE AZUL",
+  "MONTE AZUL": "MONTE AZUL",
+  PITANGUEIRAS: "PITANGUEIRAS",
+  PITANGEURAS: "PITANGUEIRAS",
+  SHOPPING: "SHOPPING",
+  VD: "VD",
+  VIRADOURO: "VIRADOURO",
 };
 
 function normalizeCompanyNameBudget(v) {
-  const raw = String(v ?? "").trim().toUpperCase();
-  const base = BUDGET_COMPANY_NAME_MAP[raw] || raw;
-  return base
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
+  const raw = String(v ?? "")
     .trim()
-    .toUpperCase();
+    .toUpperCase()
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "");
+
+  const compact = raw
+    .replace(/\.[^.]+$/g, "")
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .replace(/[^A-Z0-9 ]+/g, " ")
+    .trim();
+
+  const compactNoSpace = compact.replace(/\s+/g, "");
+  const direct = BUDGET_COMPANY_NAME_MAP[compact] || BUDGET_COMPANY_NAME_MAP[compactNoSpace];
+  if (direct) return direct;
+
+  const tokenSet = new Set(compact.split(" ").filter(Boolean));
+  const has = (...terms) => terms.every((t) => tokenSet.has(t));
+
+  if (has("MONTE", "AZUL") || compact.includes("MONTE AZUL") || compact.includes("MONTEAZUL")) return "MONTE AZUL";
+  if (compact.includes("PITANGUEIRAS") || compact.includes("PITANGEURAS")) return "PITANGUEIRAS";
+  if (compact.includes("VIRADOURO")) return "VIRADOURO";
+  if (compact.includes("SHOPPING")) return "SHOPPING";
+  if (compact === "VD" || tokenSet.has("VD") || compact.includes(" VD ") || compact.startsWith("VD ") || compact.endsWith(" VD")) return "VD";
+  if (compact.includes("COLINA")) return "COLINA";
+  if (compact.includes("CENTRO")) return "CENTRO";
+
+  return compact;
 }
 
 
 
 const PLANO_MATCH_LS_KEY = "bi_service_rateio_plano_depara_v2";
+
+const DEFAULT_PLANO_MATCH_MAP = {
+  "compra de mercadorias fc": "2.1.1 - CMV",
+  "compra de mercadorias sc": "2.1.1 - CMV",
+  "compra de mercadorias lf": "2.1.1 - CMV",
+  "compra de mercadorias": "2.1.1 - CMV",
+  "cmv": "2.1.1 - CMV",
+
+  "icms st fc imposto sobre operacoes relativas a circulacao de mercadorias": "2.1.1 - CMV",
+  "icms st fc": "2.1.1 - CMV",
+  "icms st": "2.1.1 - CMV",
+  "ipi fc imposto sobre produtos industrializados": "2.1.1 - CMV",
+  "ipi fc": "2.1.1 - CMV",
+  "ipi": "2.1.1 - CMV",
+  "material auxiliar de embalagem mae": "4.5 - Material De Embalagem",
+  "mae": "4.5 - Material De Embalagem",
+
+  "esforcos de marketing promocional": "4.4 - Esforços De Marketing Promocional (3%)",
+  "despesas com encontro de ciclo": "4.4.1 - Encontro de Ciclo",
+  "material promocional": "4.4.6 - Produção/Propaganda",
+  "material de publicidade e propaganda": "4.4.6 - Produção/Propaganda",
+  "mkt reg 01 midia e ativacao gestao do gb": "4.4.4 - Mídia Local",
+  "mkt reg 04 midia e ativacao gestao do cp com agencias locais": "4.4.4 - Mídia Local",
+  "mkt reg 05 midia e ativacao gestao do cp com opus ou idea3": "4.4.5 - Mídia Regional",
+  "mkt reg 06 impressao e producao de material": "4.4.6 - Produção/Propaganda",
+
+  "remuneracao de esforcos tech ret": "6.2.11 - ZENITH - Outros Serviços Terceirizados",
+  "servicos de informatica": "6.2.3 -  Serviços De Informática",
+
+  "irrf funcionario imposto sobre a renda retido na fonte": "6.1.2.6 - IRRF - Salários",
+  "irrf funcionario": "6.1.2.6 - IRRF - Salários",
+  "aviso previo indenizado": "6.1.4.2 - Indenizações / Rescisões",
+  "ferias proporcional indenizadas": "6.1.4.2 - Indenizações / Rescisões",
+  "aviso previo proporcional lei 12 506 11": "6.1.4.2 - Indenizações / Rescisões",
+  "13o salario indenizado": "6.1.4.2 - Indenizações / Rescisões",
+  "multa fgts art 479 da clt fundo de garantia do tempo de servico": "6.1.4.2 - Indenizações / Rescisões",
+  "recrutamento e selecao": "6.1.4.4 - Recrutamento e Seleção",
+
+  "despesas gerencial": "6.8 - Despesas Administrativas",
+  "outros impostos e taxas": "6.9.3 - Impostos e Taxas",
+  "central de inicios": "6.9 - Despesas Gerais",
+  "bens nao depreciaveis valor ate 1 200 00": "6.10.3 - Bens não Depreciáveis",
+  "maquinas equipamentos e moveis fc": "6.10.1 - Máq., Equip. e Móveis",
+};
+
 
 const STOPWORDS_PLANO = new Set([
   "de", "da", "do", "das", "dos", "e", "em", "para", "por", "com",
@@ -611,13 +687,14 @@ function planoSimilarity(a, b) {
 }
 
 function loadPlanoMatchMap() {
-  if (typeof window === "undefined") return {};
+  const base = { ...DEFAULT_PLANO_MATCH_MAP };
+  if (typeof window === "undefined") return base;
   try {
     const raw = window.localStorage.getItem(PLANO_MATCH_LS_KEY);
     const parsed = raw ? JSON.parse(raw) : {};
-    return parsed && typeof parsed === "object" ? parsed : {};
+    return parsed && typeof parsed === "object" ? { ...base, ...parsed } : base;
   } catch {
-    return {};
+    return base;
   }
 }
 
@@ -845,6 +922,7 @@ export default function DashboardRateioUploadInteligentePage() {
 
   const [rows, setRows] = useState([]);
   const [fileMeta, setFileMeta] = useState({ name: "", size: 0, loadedAt: "" });
+  const [dedupeInfo, setDedupeInfo] = useState({ removed: 0, kept: 0, total: 0 });
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -946,7 +1024,7 @@ export default function DashboardRateioUploadInteligentePage() {
     return index;
   }, [budgetEmpresaData]);
 
-  const generatedBudgetMetaForPlano = (plano, empresaFiltro = "Todas", monthKeySet = null, fallbackRealValue = 0) => {
+  const generatedBudgetMetaForPlano = (plano, empresaFiltro = "Todas", monthKeySet = null) => {
     const match = resolvePlanoMatch(plano, budgetDrePlanos, planoMatchMap);
 
     if (match?.matched) {
@@ -968,15 +1046,11 @@ export default function DashboardRateioUploadInteligentePage() {
       }
     }
 
-    if (Number(fallbackRealValue || 0) > 0) {
-      return { valor: Number(fallbackRealValue || 0) * 0.9, estimado: true, match };
-    }
-
     return { valor: 0, estimado: false, match };
   };
 
-  const generatedBudgetValueForPlano = (plano, empresaFiltro = "Todas", monthKeySet = null, fallbackRealValue = 0) => {
-    return generatedBudgetMetaForPlano(plano, empresaFiltro, monthKeySet, fallbackRealValue).valor;
+  const generatedBudgetValueForPlano = (plano, empresaFiltro = "Todas", monthKeySet = null) => {
+    return generatedBudgetMetaForPlano(plano, empresaFiltro, monthKeySet).valor;
   };
 
 // { [plano]: { value?: string, pct?: string } }
@@ -1044,7 +1118,14 @@ const sanitizeNumericText = (s) => {
       if (!raw) return;
       const parsed = JSON.parse(raw);
       if (parsed?.rows?.length) setRows(parsed.rows);
-      if (parsed?.meta) setFileMeta(parsed.meta);
+      if (parsed?.meta) {
+        setFileMeta(parsed.meta);
+        setDedupeInfo({
+          removed: Number(parsed.meta?.duplicatesRemoved || 0),
+          kept: Number(parsed.meta?.finalCount || (Array.isArray(parsed.rows) ? parsed.rows.length : 0)),
+          total: Number(parsed.meta?.rawCount || (Array.isArray(parsed.rows) ? parsed.rows.length : 0)),
+        });
+      }
     } catch {}
   }, []);
 
@@ -1091,24 +1172,13 @@ useEffect(() => {
       }
 
       if (view === "drill") {
+        setDrillPlano(sp.get("plano") || null);
+        setDrillMes(sp.get("mes") || "");
+        setDetailTitle("");
         const rawDrill = localStorage.getItem(DRILL_VIEW_LS_KEY);
         if (rawDrill) {
           const parsed = JSON.parse(rawDrill);
-          setDrillPlano(parsed?.plano || sp.get("plano") || null);
-          setDrillMes(parsed?.mes || sp.get("mes") || "");
-          if (typeof parsed?.empresa === "string" && parsed.empresa) {
-            setFEmpresa(parsed.empresa);
-          }
-          if (Array.isArray(parsed?.mesesSel)) {
-            setMesesSel(parsed.mesesSel);
-          }
-          if (Array.isArray(parsed?.rows)) {
-            setDetailRows(parsed.rows);
-            setDetailTitle(parsed?.title || "");
-          }
-        } else {
-          setDrillPlano(sp.get("plano") || null);
-          setDrillMes(sp.get("mes") || "");
+          if (Array.isArray(parsed?.rows)) setDetailRows(parsed.rows);
         }
       }
 
@@ -1223,30 +1293,69 @@ useEffect(() => {
     setDetailRows([]);
     setDetailQuery("");
     setError("");
+    setDedupeInfo({ removed: 0, kept: 0, total: 0 });
     try {
       localStorage.removeItem(LS_KEY);
     } catch {}
   }
 
-  async function handleFile(file) {
+  async function handleFile(fileOrFiles) {
     setLoading(true);
     setError("");
     try {
-      if (!file) throw new Error("Selecione um arquivo.");
-      const isXlsx = file.name.toLowerCase().endsWith(".xlsx") || file.name.toLowerCase().endsWith(".xls");
-      if (!isXlsx) throw new Error("Formato inválido. Envie um .xlsx ou .xls");
+      const files = Array.isArray(fileOrFiles)
+        ? fileOrFiles.filter(Boolean)
+        : Array.from(fileOrFiles || []).filter(Boolean);
+
+      if (!files.length) throw new Error("Selecione ao menos um arquivo.");
 
       const maxMB = 25;
-      if (file.size > maxMB * 1024 * 1024) {
-        throw new Error(`Arquivo muito grande (${(file.size / 1024 / 1024).toFixed(1)}MB). Limite: ${maxMB}MB`);
+      for (const file of files) {
+        const isXlsx = file.name.toLowerCase().endsWith(".xlsx") || file.name.toLowerCase().endsWith(".xls");
+        if (!isXlsx) throw new Error(`Formato inválido em ${file.name}. Envie apenas .xlsx ou .xls`);
+        if (file.size > maxMB * 1024 * 1024) {
+          throw new Error(`Arquivo muito grande (${file.name} - ${(file.size / 1024 / 1024).toFixed(1)}MB). Limite: ${maxMB}MB`);
+        }
       }
 
-      const normalized = await parseXlsxSmart(file);
+      const parsedList = [];
+      for (const file of files) {
+        const normalized = await parseXlsxSmart(file);
+        parsedList.push({ file, normalized });
+      }
 
-      const nextRows = Array.isArray(normalized?.rows) ? normalized.rows : [];
-      const nextMeta = { name: file.name, size: file.size, loadedAt: new Date().toLocaleString("pt-BR") };
+      const rawRows = parsedList.flatMap(({ normalized }) => Array.isArray(normalized?.rows) ? normalized.rows : []);
+      const dedupedMap = new Map();
+      for (const row of rawRows) {
+        const dedupeKey = [
+          String(row?.data ?? ""),
+          String(row?.competencia ?? ""),
+          normKey(row?.plano),
+          normKey(row?.conta),
+          normKey(row?.empresa),
+          normKey(row?.fornecedor),
+          normKey(row?.status),
+          Number(row?.valor || 0).toFixed(2),
+        ].join("|");
+        if (!dedupedMap.has(dedupeKey)) dedupedMap.set(dedupeKey, row);
+      }
+      const nextRows = Array.from(dedupedMap.values());
+      const duplicatesRemoved = Math.max(0, rawRows.length - nextRows.length);
+      const totalSize = files.reduce((acc, file) => acc + (Number(file.size) || 0), 0);
+      const nextMeta = {
+        name: files.length === 1 ? files[0].name : `${files.length} arquivos de rateio`,
+        size: totalSize,
+        loadedAt: new Date().toLocaleString("pt-BR"),
+        count: files.length,
+        names: files.map((file) => file.name),
+        duplicatesRemoved,
+        rawCount: rawRows.length,
+        finalCount: nextRows.length,
+      };
+
       setRows(nextRows);
       setFileMeta(nextMeta);
+      setDedupeInfo({ removed: duplicatesRemoved, kept: nextRows.length, total: rawRows.length });
       try {
         localStorage.setItem(LS_KEY, JSON.stringify({ rows: nextRows, meta: nextMeta }));
       } catch {}
@@ -1259,8 +1368,8 @@ useEffect(() => {
 
   function onDrop(ev) {
     ev.preventDefault();
-    const file = ev.dataTransfer?.files?.[0];
-    if (file) handleFile(file);
+    const files = Array.from(ev.dataTransfer?.files || []);
+    if (files.length) handleFile(files);
   }
   function onDragOver(ev) {
     ev.preventDefault();
@@ -1355,15 +1464,17 @@ useEffect(() => {
     try {
       persistViewFilters();
 
-      let sourceRows = [];
-      try {
-        const rawDataset = localStorage.getItem(LS_KEY);
-        const parsedDataset = rawDataset ? JSON.parse(rawDataset) : null;
-        sourceRows = Array.isArray(parsedDataset?.rows) ? parsedDataset.rows : [];
-      } catch {
-        sourceRows = [];
-      }
+      const readStoredDatasetRows = () => {
+        try {
+          const rawDataset = localStorage.getItem(LS_KEY);
+          const parsedDataset = rawDataset ? JSON.parse(rawDataset) : null;
+          return Array.isArray(parsedDataset?.rows) ? parsedDataset.rows : [];
+        } catch {
+          return [];
+        }
+      };
 
+      let sourceRows = readStoredDatasetRows();
       if (!sourceRows.length && Array.isArray(rows) && rows.length) {
         sourceRows = rows;
       }
@@ -1385,46 +1496,48 @@ useEffect(() => {
         }
       } catch {}
 
-      let baseRows = sourceRows.filter((r) => {
-        if (r.plano !== plano) return false;
+      const alvoPlano = normalizePlanoBudgetKey(plano);
+      const matchesPlano = (r, useNormalizedPlano = false) => {
+        if (useNormalizedPlano) return normalizePlanoBudgetKey(r?.plano) === alvoPlano;
+        return String(r?.plano ?? "").trim() === String(plano ?? "").trim();
+      };
 
-        const empresaOk = empresaAtual === "Todas" ? true : r.empresa === empresaAtual;
-        if (!empresaOk) return false;
+      const matchesEmpresa = (r, useEmpresaFilter = true) => {
+        if (!useEmpresaFilter || empresaAtual === "Todas") return true;
+        return String(r?.empresa ?? "").trim() === String(empresaAtual ?? "").trim();
+      };
 
-        if (mesesAtuais.length) {
-          const mi = mesIndexFromISO(r.data ?? r.competencia);
-          if (!mesesAtuais.includes(mi)) return false;
-        }
+      const matchesMes = (r, useMesFilter = true) => {
+        if (!useMesFilter || !mesesAtuais.length) return true;
+        const mi = mesIndexFromISO(r?.data ?? r?.competencia);
+        return mesesAtuais.includes(mi);
+      };
 
-        return true;
-      });
-
-      if (!baseRows.length) {
-        const alvo = normalizePlanoBudgetKey(plano);
-        baseRows = sourceRows.filter((r) => {
-          if (normalizePlanoBudgetKey(r.plano) !== alvo) return false;
-
-          const empresaOk = empresaAtual === "Todas" ? true : r.empresa === empresaAtual;
-          if (!empresaOk) return false;
-
-          if (mesesAtuais.length) {
-            const mi = mesIndexFromISO(r.data ?? r.competencia);
-            if (!mesesAtuais.includes(mi)) return false;
-          }
-
+      const findRowsForPlano = (useNormalizedPlano = false, useEmpresaFilter = true, useMesFilter = true) => {
+        return sourceRows.filter((r) => {
+          if (!matchesPlano(r, useNormalizedPlano)) return false;
+          if (!matchesEmpresa(r, useEmpresaFilter)) return false;
+          if (!matchesMes(r, useMesFilter)) return false;
           return true;
         });
-      }
+      };
+
+      let drillSnapshotRows = findRowsForPlano(false, true, true);
+      if (!drillSnapshotRows.length) drillSnapshotRows = findRowsForPlano(true, true, true);
+      if (!drillSnapshotRows.length) drillSnapshotRows = findRowsForPlano(false, true, false);
+      if (!drillSnapshotRows.length) drillSnapshotRows = findRowsForPlano(true, true, false);
+      if (!drillSnapshotRows.length) drillSnapshotRows = findRowsForPlano(false, false, false);
+      if (!drillSnapshotRows.length) drillSnapshotRows = findRowsForPlano(true, false, false);
 
       localStorage.setItem(
         DRILL_VIEW_LS_KEY,
         JSON.stringify({
-          plano,
-          mes,
+          plano: String(plano),
+          mes: String(mes || ""),
           title: `Detalhamento — ${plano}`,
-          rows: baseRows,
-          empresa: empresaAtual,
-          mesesSel: mesesAtuais,
+          rows: drillSnapshotRows,
+          empresa: drillSnapshotRows.length ? empresaAtual : "Todas",
+          mesesSel: drillSnapshotRows.length ? mesesAtuais : [],
         })
       );
 
@@ -1808,6 +1921,20 @@ const clearAllBudgets = () => {
   }, [planosSomente, periodoMesTotals, periodoRealByPlano, budgets, totalBaseAll]);
 
 
+  const generatedBudgetEntriesFiltered = useMemo(() => {
+    if (!generatedBudgetAvailable) return [];
+
+    return Object.values(budgetEmpresaData?.entries || {}).filter((item) => {
+      if (!budgetEmpresaMatchesFilter(item?.empresa, fEmpresa)) return false;
+      if (!selectedMonthKeys) return true;
+
+      return Object.keys(item?.months || {}).some((mes) => {
+        const mesNum = String(mes).split("-")[1] || "";
+        return selectedMonthKeys.has(mesNum);
+      });
+    });
+  }, [generatedBudgetAvailable, budgetEmpresaData, fEmpresa, selectedMonthKeys]);
+
   const contasNoFiltro = useMemo(() => {
     // IMPORTANTE: orçamento é por PLANO (plano de conta). Não usar r.conta aqui,
     // porque em alguns contextos r.conta pode ser "Plano — Empresa — Fornecedor" e não bate com o cadastro.
@@ -1827,47 +1954,43 @@ const clearAllBudgets = () => {
 
   const generatedBudgetTotal = useMemo(() => {
     if (!generatedBudgetAvailable) return 0;
-    return contasNoFiltro.reduce(
-      (acc, plano) => acc + generatedBudgetValueForPlano(plano, fEmpresa, selectedMonthKeys, realMapByPlano.get(plano) ?? 0),
-      0
-    );
-  }, [generatedBudgetAvailable, contasNoFiltro, fEmpresa, selectedMonthKeys, realMapByPlano]);
+
+    let total = 0;
+    for (const plano of contasNoFiltro) {
+      total += generatedBudgetValueForPlano(plano, fEmpresa, selectedMonthKeys);
+    }
+    return total;
+  }, [generatedBudgetAvailable, contasNoFiltro, fEmpresa, selectedMonthKeys, budgetEmpresaIndex, budgetDrePlanos, planoMatchMap]);
 
   const generatedBudgetByMes = useMemo(() => {
     const map = new Map();
     if (!generatedBudgetAvailable) return map;
 
-    for (const plano of contasNoFiltro) {
-      const match = resolvePlanoMatch(plano, budgetDrePlanos, planoMatchMap);
-      if (match?.matched) {
-        const normalized = normalizePlanoBudgetKey(match.matched);
-        const items = budgetEmpresaIndex.get(normalized) || [];
-        let matchedTotal = 0;
-
-        for (const item of items) {
-          if (!budgetEmpresaMatchesFilter(item?.empresa, fEmpresa)) continue;
-          for (const [mes, mm] of Object.entries(item?.months || {})) {
-            const mesNum = String(mes).split("-")[1] || "";
-            if (selectedMonthKeys && !selectedMonthKeys.has(mesNum)) continue;
-            const previstoMes = Number(mm?.previsto || 0);
-            matchedTotal += previstoMes;
-            map.set(mes, (map.get(mes) || 0) + previstoMes);
-          }
+    let monthList = [];
+    if (selectedMonthKeys?.size) {
+      monthList = Array.from(selectedMonthKeys).sort();
+    } else {
+      const monthSet = new Set();
+      for (const item of generatedBudgetEntriesFiltered) {
+        for (const mes of Object.keys(item?.months || {})) {
+          const mesNum = String(mes).split("-")[1] || "";
+          if (mesNum) monthSet.add(mesNum);
         }
-
-        if (matchedTotal > 0) continue;
       }
+      monthList = Array.from(monthSet).sort();
+    }
 
-      for (const r of filtered) {
-        if (String(r?.plano ?? "") !== plano) continue;
-        const mes = monthKey(r?.data);
-        const mesNum = String(mes).split("-")[1] || "";
-        if (selectedMonthKeys && !selectedMonthKeys.has(mesNum)) continue;
-        map.set(mes, (map.get(mes) || 0) + Number(r?.valor || 0) * 0.9);
+    for (const mesNum of monthList) {
+      const onlyThisMonth = new Set([mesNum]);
+      let totalMes = 0;
+      for (const plano of contasNoFiltro) {
+        totalMes += generatedBudgetValueForPlano(plano, fEmpresa, onlyThisMonth);
       }
+      const mesKey = `${budgetEmpresaData?.year || new Date().getFullYear()}-${mesNum}`;
+      map.set(mesKey, totalMes);
     }
     return map;
-  }, [generatedBudgetAvailable, contasNoFiltro, budgetEmpresaIndex, budgetDrePlanos, planoMatchMap, fEmpresa, selectedMonthKeys, filtered]);
+  }, [generatedBudgetAvailable, contasNoFiltro, fEmpresa, selectedMonthKeys, budgetEmpresaData, budgetEmpresaIndex, budgetDrePlanos, planoMatchMap, generatedBudgetEntriesFiltered]);
 
 
 
@@ -1896,7 +2019,7 @@ const clearAllBudgets = () => {
     for (const plano of contasNoFiltro) {
       const real = realMapByPlano.get(plano) ?? 0;
       const budgetMeta = generatedBudgetAvailable
-        ? generatedBudgetMetaForPlano(plano, fEmpresa, selectedMonthKeys, real)
+        ? generatedBudgetMetaForPlano(plano, fEmpresa, selectedMonthKeys)
         : { valor: budgetValueForPlano(plano), estimado: false };
       const previsto = Number(budgetMeta?.valor || 0);
       const st = budgetStatus(real, previsto);
@@ -1983,7 +2106,7 @@ const clearAllBudgets = () => {
     const total = arr.reduce((a, b) => a + (b.valor || 0), 0);
     return arr.map((d) => ({
       ...d,
-      budget: generatedBudgetAvailable ? generatedBudgetValueForPlano(d.plano, fEmpresa, selectedMonthKeys, d.valor) : budgetValueForPlano(d.plano),
+      budget: generatedBudgetAvailable ? generatedBudgetValueForPlano(d.plano, fEmpresa, selectedMonthKeys) : budgetValueForPlano(d.plano),
       pct: total ? (d.valor / total) * 100 : 0,
       pctLabel: total ? `${((d.valor / total) * 100).toFixed(1)}%` : "0.0%",
     }));
@@ -2200,30 +2323,39 @@ const outrosPlanos = useMemo(() => {
   // ------------------------
   const drillRowsBase = useMemo(() => {
     if (!drillPlano) return [];
+
+    const alvoPlano = normalizePlanoBudgetKey(drillPlano);
+
     if (standaloneView === "drill" && Array.isArray(detailRows) && detailRows.length) {
-      return detailRows.filter((r) => {
-        if (r.plano !== drillPlano) return false;
-        if (mesesSel.length) {
-          const mi = mesIndexFromISO(r.data ?? r.competencia);
-          if (!mesesSel.includes(mi)) return false;
-        }
-        return true;
+      return detailRows.filter((r) => normalizePlanoBudgetKey(r?.plano) === alvoPlano);
+    }
+
+    const readStoredDatasetRows = () => {
+      try {
+        const rawDataset = localStorage.getItem(LS_KEY);
+        const parsedDataset = rawDataset ? JSON.parse(rawDataset) : null;
+        return Array.isArray(parsedDataset?.rows) ? parsedDataset.rows : [];
+      } catch {
+        return [];
+      }
+    };
+
+    const base = Array.isArray(rows) && rows.length ? rows : readStoredDatasetRows();
+
+    let filtrado = base.filter((r) => normalizePlanoBudgetKey(r?.plano) === alvoPlano);
+
+    if (fEmpresa !== "Todas") {
+      filtrado = filtrado.filter((r) => String(r?.empresa ?? "").trim() === String(fEmpresa ?? "").trim());
+    }
+
+    if (Array.isArray(mesesSel) && mesesSel.length) {
+      filtrado = filtrado.filter((r) => {
+        const mi = mesIndexFromISO(r?.data ?? r?.competencia);
+        return mesesSel.includes(mi);
       });
     }
-    return rows.filter((r) => {
-      const planoOk = r.plano === drillPlano;
-      if (!planoOk) return false;
 
-      const empresaOk = fEmpresa === "Todas" ? true : r.empresa === fEmpresa;
-      if (!empresaOk) return false;
-
-      if (mesesSel.length) {
-        const mi = mesIndexFromISO(r.data ?? r.competencia);
-        if (!mesesSel.includes(mi)) return false;
-      }
-
-      return true;
-    });
+    return filtrado;
   }, [rows, drillPlano, fEmpresa, mesesSel, standaloneView, detailRows]);
 
   const drillMesOptions = useMemo(() => {
@@ -2310,6 +2442,30 @@ const outrosPlanos = useMemo(() => {
     }
   }
 
+  async function exportOutrosTableXlsx() {
+    try {
+      const mod = await import("xlsx");
+      const XLSX = mod.default ?? mod;
+
+      const sourceRows = Array.isArray(detailRows) && detailRows.length ? detailRows : outrosDetalhe.rows;
+      const tableRows = sourceRows.map((d) => ({
+        Plano: d?.plano || "",
+        Valor: Number(d?.valor || 0),
+        "% Outros": typeof d?.pct === "number" ? Number(d.pct) : null,
+      }));
+
+      const wb = XLSX.utils.book_new();
+      const wsTabela = XLSX.utils.json_to_sheet(
+        tableRows.length ? tableRows : [{ Plano: "", Valor: 0, "% Outros": null }]
+      );
+      XLSX.utils.book_append_sheet(wb, wsTabela, "Outros");
+      XLSX.writeFile(wb, "outros_tabela.xlsx");
+    } catch (e) {
+      console.error(e);
+      alert("Não foi possível exportar o XLSX de Outros.");
+    }
+  }
+
   const drillByFornecedor = useMemo(() => aggTop(drillRows, "fornecedor", 12), [drillRows]);
   const drillByEmpresa = useMemo(() => aggTop(drillRows, "empresa", 12), [drillRows]);
   const drillByConta = useMemo(() => {
@@ -2336,11 +2492,20 @@ const outrosPlanos = useMemo(() => {
     return Array.from(m.entries())
       .map(([mes, valor]) => {
         const totalMes = totalMesMap.get(mes) ?? 0;
-        const previsto = budgetValueForPlanoMes(drillPlano, totalMes, m.size);
+        let previsto = 0;
+
+        if (generatedBudgetAvailable) {
+          const mesNum = String(mes).split("-")[1] || "";
+          const onlyThisMonth = mesNum ? new Set([mesNum]) : null;
+          previsto = generatedBudgetValueForPlano(drillPlano, fEmpresa, onlyThisMonth);
+        } else {
+          previsto = budgetValueForPlanoMes(drillPlano, totalMes, m.size);
+        }
+
         return { mes, valor, previsto, status: budgetStatus(valor, previsto) };
       })
       .sort((a, b) => (a.mes > b.mes ? 1 : -1));
-  }, [drillRowsBase, byMes, drillPlano, budgets, totalGeral]);
+  }, [drillRowsBase, byMes, drillPlano, budgets, totalGeral, generatedBudgetAvailable, fEmpresa, budgetEmpresaIndex, budgetDrePlanos, planoMatchMap]);
 
 
 
@@ -2524,7 +2689,10 @@ const outrosPlanos = useMemo(() => {
         <header className="sticky top-0 z-20 border-b border-white/10 bg-[#0c1118]/90 backdrop-blur px-6 py-4">
           <div className="max-w-7xl mx-auto flex items-center justify-between gap-3">
             <div><div className="text-lg font-semibold text-white/90">Detalhamento — Outros</div><div className="text-[12px] text-white/60">Planos agrupados em outros</div></div>
-            <button type="button" onClick={returnToDashboardFromStandalone} className="px-3 py-2 rounded-lg text-sm border bg-white/5 border-white/10 text-white/80 hover:bg-white/10">← Voltar</button>
+            <div className="flex items-center gap-2">
+              <button type="button" onClick={exportOutrosTableXlsx} className="px-3 py-2 rounded-lg text-sm border bg-white/5 border-white/10 text-white/80 hover:bg-white/10">Exportar XLSX</button>
+              <button type="button" onClick={returnToDashboardFromStandalone} className="px-3 py-2 rounded-lg text-sm border bg-white/5 border-white/10 text-white/80 hover:bg-white/10">← Voltar</button>
+            </div>
           </div>
         </header>
         <main className="max-w-7xl mx-auto px-6 py-6 space-y-4">
@@ -2532,11 +2700,11 @@ const outrosPlanos = useMemo(() => {
             <div className="mb-3 text-white/80">Total: {fmtBRL((Array.isArray(detailRows) && detailRows.length ? detailRows : outrosDetalhe.rows).reduce((acc, d) => acc + (Number(d?.valor || 0)), 0) || 0)}</div>
             <div className="max-h-[70vh] overflow-auto rounded-lg border border-white/10">
               {(Array.isArray(detailRows) && detailRows.length ? detailRows : outrosDetalhe.rows).map((d, i) => (
-                <button key={`${d.plano}-${i}`} type="button" onClick={() => openDrillStandalone(d.plano)} className="w-full text-left px-3 py-2 hover:bg-white/5 flex items-center gap-2 border-b border-white/5 last:border-b-0">
+                <div key={`${d.plano}-${i}`} className="w-full text-left px-3 py-2 flex items-center gap-2 border-b border-white/5 last:border-b-0">
                   <span className="truncate text-white/80">{d.plano}</span>
                   <span className="ml-auto text-white/70">{fmtBRL(d.valor)}</span>
                   <span className="text-white/50 text-xs w-[56px] text-right">{d.pctLabel || ""}</span>
-                </button>
+                </div>
               ))}
             </div>
           </Card>
@@ -2779,6 +2947,7 @@ const outrosPlanos = useMemo(() => {
                   ref={receitaBudgetInputRef}
                   type="file"
                   accept=".xlsx,.xls"
+                  multiple
                   className="hidden"
                   onChange={(e) => setBudgetReceitaFile(e.target.files?.[0] || null)}
                 />
@@ -2802,6 +2971,7 @@ const outrosPlanos = useMemo(() => {
                   ref={dreBudgetInputRef}
                   type="file"
                   accept=".xlsx,.xls"
+                  multiple
                   multiple
                   className="hidden"
                   onChange={(e) => setBudgetDreFiles(Array.from(e.target.files || []))}
@@ -3013,7 +3183,10 @@ const outrosPlanos = useMemo(() => {
             <div className="flex flex-col md:flex-row md:items-center gap-3 justify-between">
               <div className="space-y-1">
                 <div className="text-sm font-semibold text-white/90">{rows.length ? "Dataset carregado" : "Nenhum arquivo carregado"}</div>
-                <div className="text-[12px] text-white/60">Pode ter títulos acima — eu detecto o cabeçalho automaticamente.</div>
+                <div className="text-[12px] text-white/60">Pode carregar 1 ou vários arquivos de rateio — eu junto tudo na mesma base, detecto o cabeçalho automaticamente e removo linhas idênticas repetidas.</div>
+                {dedupeInfo.removed > 0 && (
+                  <div className="text-[12px] text-amber-300">Duplicidades removidas automaticamente: {dedupeInfo.removed} linha(s). Base final: {dedupeInfo.kept} de {dedupeInfo.total} linha(s).</div>
+                )}
                 {error && <div className="text-[12px] text-rose-300">Erro: {error}</div>}
                 {loading && <div className="text-[12px] text-white/70">Lendo arquivo...</div>}
               </div>
@@ -3024,7 +3197,7 @@ const outrosPlanos = useMemo(() => {
                   className="px-3 py-2 rounded-lg bg-sky-500/20 border border-sky-400/30 hover:bg-sky-500/30 text-sm"
                   disabled={loading}
                 >
-                  Selecionar arquivo
+                  Selecionar arquivo(s)
                 </button>
                 <button
                   onClick={clearData}
@@ -3037,8 +3210,9 @@ const outrosPlanos = useMemo(() => {
                   ref={inputRef}
                   type="file"
                   accept=".xlsx,.xls"
+                  multiple
                   className="hidden"
-                  onChange={(e) => handleFile(e.target.files?.[0])}
+                  onChange={(e) => handleFile(Array.from(e.target.files || []))}
                 />
               </div>
             </div>
@@ -3276,13 +3450,6 @@ const outrosPlanos = useMemo(() => {
                           key={i}
                           fill={PIE_COLORS[i % PIE_COLORS.length]}
                           style={{ cursor: "pointer" }}
-                          onClick={() => {
-                            const plano = entry?.plano;
-                            if (plano) {
-                              openDrillStandalone(plano);
-                              setDrillMes("");
-                            }
-                          }}
                         />
                       ))}
                     </Pie>
@@ -3300,10 +3467,10 @@ const outrosPlanos = useMemo(() => {
             </div>
           </Card>
 
-          <Card title="Top Planos de Contas" style={{ height: 420 }}>
-            <div style={{ height: 340 }}>
+          <Card title="Top Planos de Contas" style={{ height: 460 }}>
+            <div style={{ height: 390 }}>
               {topPlanos.length ? (
-                <ResponsiveContainer width="100%" height={340}>
+                <ResponsiveContainer width="100%" height={390}>
                   <BarChart data={topPlanos} barGap={-34} margin={{ top: 34, right: 12, left: 0, bottom: 0 }}>
                     <CartesianGrid stroke="rgba(255,255,255,0.08)" strokeDasharray="3 3" />
                     <XAxis dataKey="plano" hide />
@@ -3463,12 +3630,6 @@ const outrosPlanos = useMemo(() => {
                 dataKey="valor"
                 fill={C_BLUE}
                 radius={[8, 8, 8, 8]}
-                onClick={(d) => {
-                  const name = d?.payload?.plano ?? d?.plano;
-                  if (!name) return;
-                  setOutrosOpen(false);
-                  openDrillStandalone(name);
-                }}
               >
                 <LabelList dataKey="pctLabel" position="right" />
               </Bar>
@@ -3487,20 +3648,15 @@ const outrosPlanos = useMemo(() => {
       <div className="text-sm font-semibold text-white/90 mb-2">Lista completa</div>
       <div className="max-h-[360px] overflow-auto rounded-lg border border-white/10">
         {outrosDetalhe.rows.map((d, i) => (
-          <button
+          <div
             key={`${d.plano}-${i}`}
-            type="button"
-            onClick={() => {
-              setOutrosOpen(false);
-              openDrillStandalone(d.plano);
-            }}
-            className="w-full text-left px-3 py-2 hover:bg-white/5 flex items-center gap-2 border-b border-white/5 last:border-b-0"
+            className="w-full text-left px-3 py-2 flex items-center gap-2 border-b border-white/5 last:border-b-0"
             title={d.plano}
           >
             <span className="truncate text-white/80">{d.plano}</span>
             <span className="ml-auto text-white/70">{fmtBRL(d.valor)}</span>
             <span className="text-white/50 text-xs w-[56px] text-right">{d.pctLabel}</span>
-          </button>
+          </div>
         ))}
       </div>
     </div>
