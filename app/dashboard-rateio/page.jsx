@@ -3,6 +3,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
 import * as XLSX from "xlsx";
+import planoDeParaOficial from "./plano_depara_oficial.json";
 import {
   ResponsiveContainer,
   BarChart,
@@ -687,15 +688,10 @@ function planoSimilarity(a, b) {
 }
 
 function loadPlanoMatchMap() {
-  const base = { ...DEFAULT_PLANO_MATCH_MAP };
-  if (typeof window === "undefined") return base;
-  try {
-    const raw = window.localStorage.getItem(PLANO_MATCH_LS_KEY);
-    const parsed = raw ? JSON.parse(raw) : {};
-    return parsed && typeof parsed === "object" ? { ...base, ...parsed } : base;
-  } catch {
-    return base;
-  }
+  return {
+    ...DEFAULT_PLANO_MATCH_MAP,
+    ...planoDeParaOficial,
+  };
 }
 
 function savePlanoMatchMap(map) {
