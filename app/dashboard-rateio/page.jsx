@@ -2,6 +2,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
+import * as XLSX from "xlsx";
 import {
   ResponsiveContainer,
   BarChart,
@@ -42,6 +43,11 @@ const C_CARD_BG = "rgba(255,255,255,0.03)";
 const PIE_COLORS = [C_BLUE, C_GREEN, C_AMBER, C_ROSE, C_PURPLE, C_CYAN, C_VIOLET];
 
 const LS_KEY = "bi_service_rateio_dataset_v2_inteligente";
+const VIEW_FILTERS_LS_KEY = "bi_service_rateio_view_filters_v1";
+const DETAIL_VIEW_LS_KEY = "bi_service_rateio_detail_view_v1";
+const DRILL_VIEW_LS_KEY = "bi_service_rateio_drill_view_v1";
+const STATUS_VIEW_LS_KEY = "bi_service_rateio_status_view_v1";
+const OUTROS_VIEW_LS_KEY = "bi_service_rateio_outros_view_v1";
 
 function Card({ title, children, right = null, className = "", style = undefined }) {
   return (
@@ -404,8 +410,6 @@ function scoreHeaderRow(headers) {
 }
 
 async function parseXlsxSmart(file) {
-  const mod = await import("xlsx");
-  const XLSX = mod.default ?? mod;
 
   const buf = await file.arrayBuffer();
   const wb = XLSX.read(buf, { type: "array", cellDates: true });
@@ -534,6 +538,154 @@ function normalizeCompanyNameBudget(v) {
     .toUpperCase();
 }
 
+
+
+const PLANO_MATCH_LS_KEY = "bi_service_rateio_plano_depara_v2";
+
+const STOPWORDS_PLANO = new Set([
+  "de", "da", "do", "das", "dos", "e", "em", "para", "por", "com",
+  "fc", "sc", "lf", "tipo", "outras", "outros", "grupo", "cia"
+]);
+
+function normalizePlanoBudgetKey(v) {
+  return String(v ?? "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/^\d+(\.\d+)*\s*-\s*/g, " ")
+    .replace(/\([^)]*\)/g, " ")
+    .replace(/\b(sa|ltda|eireli|me|epp|fc)\b/g, " ")
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function planoTokens(v) {
+  return normalizePlanoBudgetKey(v)
+    .split(" ")
+    .filter(Boolean)
+    .filter((t) => !STOPWORDS_PLANO.has(t));
+}
+
+function diceCoefficient(a, b) {
+  if (!a || !b) return 0;
+  if (a === b) return 1;
+  if (a.length < 2 || b.length < 2) return 0;
+
+  const bigrams = new Map();
+  for (let i = 0; i < a.length - 1; i++) {
+    const gram = a.slice(i, i + 2);
+    bigrams.set(gram, (bigrams.get(gram) || 0) + 1);
+  }
+
+  let intersection = 0;
+  for (let i = 0; i < b.length - 1; i++) {
+    const gram = b.slice(i, i + 2);
+    const count = bigrams.get(gram) || 0;
+    if (count > 0) {
+      bigrams.set(gram, count - 1);
+      intersection++;
+    }
+  }
+
+  return (2 * intersection) / ((a.length - 1) + (b.length - 1));
+}
+
+function tokenSimilarity(a, b) {
+  const ta = new Set(planoTokens(a));
+  const tb = new Set(planoTokens(b));
+  if (!ta.size || !tb.size) return 0;
+
+  let intersection = 0;
+  for (const t of ta) if (tb.has(t)) intersection++;
+
+  return intersection / Math.max(ta.size, tb.size);
+}
+
+function planoSimilarity(a, b) {
+  const na = normalizePlanoBudgetKey(a);
+  const nb = normalizePlanoBudgetKey(b);
+  const s1 = diceCoefficient(na, nb);
+  const s2 = tokenSimilarity(na, nb);
+  return s1 * 0.55 + s2 * 0.45;
+}
+
+function loadPlanoMatchMap() {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = window.localStorage.getItem(PLANO_MATCH_LS_KEY);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function savePlanoMatchMap(map) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(PLANO_MATCH_LS_KEY, JSON.stringify(map || {}));
+  } catch {}
+}
+
+function resolvePlanoMatch(planoRateio, drePlanos = [], planoMap = {}) {
+  const normalizedRateio = normalizePlanoBudgetKey(planoRateio);
+  if (!normalizedRateio) {
+    return { matched: null, confidence: 0, mode: "unmatched", normalizedRateio };
+  }
+
+  const mapped = planoMap?.[normalizedRateio];
+  if (mapped) {
+    return { matched: mapped, confidence: 1, mode: "mapped", normalizedRateio };
+  }
+
+  const exact = drePlanos.find((p) => normalizePlanoBudgetKey(p) === normalizedRateio);
+  if (exact) {
+    return { matched: exact, confidence: 1, mode: "exact", normalizedRateio };
+  }
+
+  let best = null;
+  let bestScore = 0;
+  for (const p of drePlanos) {
+    const score = planoSimilarity(planoRateio, p);
+    if (score > bestScore) {
+      bestScore = score;
+      best = p;
+    }
+  }
+
+  if (best && bestScore >= 0.96) {
+    return { matched: best, confidence: bestScore, mode: "auto", normalizedRateio };
+  }
+  if (best && bestScore >= 0.90) {
+    return { matched: best, confidence: bestScore, mode: "approx", normalizedRateio };
+  }
+  return { matched: null, confidence: bestScore, mode: "unmatched", normalizedRateio };
+}
+
+function planoMatchesBudget(planoRateio, planoBudget, drePlanos = [], planoMap = {}) {
+  const match = resolvePlanoMatch(planoRateio, drePlanos, planoMap);
+  return !!match?.matched && normalizePlanoBudgetKey(match.matched) === normalizePlanoBudgetKey(planoBudget);
+}
+
+function budgetEmpresaMatchesFilter(budgetEmpresa, filtroEmpresa) {
+  if (!filtroEmpresa || filtroEmpresa === "Todas") return true;
+
+  const normalizeEmpresa = (v) =>
+    String(v ?? "")
+      .trim()
+      .toUpperCase()
+      .replace(/^\d+\s*\|\s*/g, "")
+      .replace(/^BOTI\s+/g, "")
+      .replace(/^O\s+BOTICARIO\s+/g, "")
+      .replace(/^BOTICARIO\s+/g, "")
+      .trim();
+
+  const a = normalizeEmpresa(budgetEmpresa);
+  const b = normalizeEmpresa(filtroEmpresa);
+  return a === b;
+}
+
 function monthIndexFromNameBR(v) {
   const s = String(v ?? "")
     .normalize("NFD")
@@ -550,8 +702,6 @@ function monthIndexFromNameBR(v) {
 }
 
 async function parseBudgetReceitaXlsx(file) {
-  const mod = await import("xlsx");
-  const XLSX = mod.default ?? mod;
   const buf = await file.arrayBuffer();
   const wb = XLSX.read(buf, { type: "array", cellDates: true });
   const ws = wb.Sheets[wb.SheetNames[0]];
@@ -582,8 +732,6 @@ async function parseBudgetReceitaXlsx(file) {
 }
 
 async function parseBudgetDreXlsx(file) {
-  const mod = await import("xlsx");
-  const XLSX = mod.default ?? mod;
   const buf = await file.arrayBuffer();
   const wb = XLSX.read(buf, { type: "array", cellDates: true });
   const ws = wb.Sheets["DRE"] || wb.Sheets[wb.SheetNames[0]];
@@ -677,6 +825,21 @@ function buildBudgetEmpresaPayload(receitaData, dreDataList) {
   };
 }
 
+function getStandaloneBootParams() {
+  if (typeof window === "undefined") {
+    return { view: "", budgetStandalone: false };
+  }
+  try {
+    const sp = new URLSearchParams(window.location.search);
+    return {
+      view: sp.get("view") || "",
+      budgetStandalone: sp.get("orcamentos") === "1",
+    };
+  } catch {
+    return { view: "", budgetStandalone: false };
+  }
+}
+
 export default function DashboardRateioUploadInteligentePage() {
   const inputRef = useRef(null);
 
@@ -700,6 +863,8 @@ export default function DashboardRateioUploadInteligentePage() {
   const BUDGET_LS_KEY = "bi_service_rateio_budgets_v1";
   const [budgetOpen, setBudgetOpen] = useState(false);
   const [budgetQuery, setBudgetQuery] = useState("");
+  const [budgetEmpresaFilter, setBudgetEmpresaFilter] = useState("Todas");
+  const [budgetMesFilter, setBudgetMesFilter] = useState("Todos");
   const [budgets, setBudgets] = useState({}); // { [plano]: { value?: number, pct?: number, mode?: "value"|"pct" } }
   // UI state (permite digitar vírgula/ponto sem o input "pular")
   const [budgetUi, setBudgetUi] = useState({}); 
@@ -707,7 +872,7 @@ export default function DashboardRateioUploadInteligentePage() {
 
   const receitaBudgetInputRef = useRef(null);
   const dreBudgetInputRef = useRef(null);
-  const [budgetStandalone, setBudgetStandalone] = useState(false);
+  const [budgetStandalone, setBudgetStandalone] = useState(() => getStandaloneBootParams().budgetStandalone);
   const [budgetReceitaFile, setBudgetReceitaFile] = useState(null);
   const [budgetDreFiles, setBudgetDreFiles] = useState([]);
   const [budgetEmpresaLoading, setBudgetEmpresaLoading] = useState(false);
@@ -721,53 +886,98 @@ export default function DashboardRateioUploadInteligentePage() {
     [budgetEmpresaData]
   );
 
+  const [planoMatchMap, setPlanoMatchMap] = useState({});
+
+  useEffect(() => {
+    setPlanoMatchMap(loadPlanoMatchMap());
+  }, []);
+
   const selectedMonthKeys = useMemo(() => {
     if (!mesesSel?.length) return null;
     return new Set(mesesSel.slice().sort((a, b) => a - b).map((mi) => String(mi + 1).padStart(2, "0")));
   }, [mesesSel]);
 
-  const generatedBudgetValueForPlano = (plano, empresaFiltro = "Todas", monthKeySet = null) => {
-    const key = normKey(plano);
-    let total = 0;
+  const budgetDrePlanos = useMemo(
+    () => Array.from(new Set(Object.values(budgetEmpresaData?.entries || {}).map((item) => String(item?.plano ?? "")).filter(Boolean))),
+    [budgetEmpresaData]
+  );
+
+  const planoMatchDiagnostics = useMemo(() => {
+    const diagnostics = {};
+    for (const plano of Array.from(new Set(rows.map((r) => String(r?.plano ?? "")).filter(Boolean)))) {
+      diagnostics[plano] = resolvePlanoMatch(plano, budgetDrePlanos, planoMatchMap);
+    }
+    return diagnostics;
+  }, [rows, budgetDrePlanos, planoMatchMap]);
+
+  useEffect(() => {
+    if (!budgetDrePlanos.length) return;
+    setPlanoMatchMap((prev) => {
+      const next = { ...(prev || {}) };
+      let changed = false;
+
+      for (const plano of Array.from(new Set(rows.map((r) => String(r?.plano ?? "")).filter(Boolean)))) {
+        const normalized = normalizePlanoBudgetKey(plano);
+        if (!normalized || next[normalized]) continue;
+        const match = resolvePlanoMatch(plano, budgetDrePlanos, next);
+        if (match?.matched && (match.mode === "exact" || match.mode === "auto")) {
+          next[normalized] = match.matched;
+          changed = true;
+        }
+      }
+
+      if (changed) {
+        savePlanoMatchMap(next);
+        return next;
+      }
+      return prev;
+    });
+  }, [rows, budgetDrePlanos]);
+
+  const budgetEmpresaIndex = useMemo(() => {
+    const index = new Map();
     for (const item of Object.values(budgetEmpresaData?.entries || {})) {
-      if (normKey(item?.plano) !== key) continue;
-      if (empresaFiltro !== "Todas" && String(item?.empresa) !== String(empresaFiltro)) continue;
-      for (const [mes, mm] of Object.entries(item?.months || {})) {
-        const mesNum = String(mes).split("-")[1] || "";
-        if (monthKeySet && !monthKeySet.has(mesNum)) continue;
-        total += Number(mm?.previsto || 0);
+      const normalized = normalizePlanoBudgetKey(item?.plano);
+      if (!normalized) continue;
+      const arr = index.get(normalized) || [];
+      arr.push(item);
+      index.set(normalized, arr);
+    }
+    return index;
+  }, [budgetEmpresaData]);
+
+  const generatedBudgetMetaForPlano = (plano, empresaFiltro = "Todas", monthKeySet = null, fallbackRealValue = 0) => {
+    const match = resolvePlanoMatch(plano, budgetDrePlanos, planoMatchMap);
+
+    if (match?.matched) {
+      const normalized = normalizePlanoBudgetKey(match.matched);
+      const items = budgetEmpresaIndex.get(normalized) || [];
+
+      let total = 0;
+      for (const item of items) {
+        if (!budgetEmpresaMatchesFilter(item?.empresa, empresaFiltro)) continue;
+        for (const [mes, mm] of Object.entries(item?.months || {})) {
+          const mesNum = String(mes).split("-")[1] || "";
+          if (monthKeySet && !monthKeySet.has(mesNum)) continue;
+          total += Number(mm?.previsto || 0);
+        }
+      }
+
+      if (total > 0) {
+        return { valor: total, estimado: false, match };
       }
     }
-    return total;
+
+    if (Number(fallbackRealValue || 0) > 0) {
+      return { valor: Number(fallbackRealValue || 0) * 0.9, estimado: true, match };
+    }
+
+    return { valor: 0, estimado: false, match };
   };
 
-  const generatedBudgetTotal = useMemo(() => {
-    if (!generatedBudgetAvailable) return 0;
-    let total = 0;
-    for (const item of Object.values(budgetEmpresaData?.entries || {})) {
-      if (fEmpresa !== "Todas" && String(item?.empresa) !== String(fEmpresa)) continue;
-      for (const [mes, mm] of Object.entries(item?.months || {})) {
-        const mesNum = String(mes).split("-")[1] || "";
-        if (selectedMonthKeys && !selectedMonthKeys.has(mesNum)) continue;
-        total += Number(mm?.previsto || 0);
-      }
-    }
-    return total;
-  }, [generatedBudgetAvailable, budgetEmpresaData, fEmpresa, selectedMonthKeys]);
-
-  const generatedBudgetByMes = useMemo(() => {
-    const map = new Map();
-    if (!generatedBudgetAvailable) return map;
-    for (const item of Object.values(budgetEmpresaData?.entries || {})) {
-      if (fEmpresa !== "Todas" && String(item?.empresa) !== String(fEmpresa)) continue;
-      for (const [mes, mm] of Object.entries(item?.months || {})) {
-        const mesNum = String(mes).split("-")[1] || "";
-        if (selectedMonthKeys && !selectedMonthKeys.has(mesNum)) continue;
-        map.set(mes, (map.get(mes) || 0) + Number(mm?.previsto || 0));
-      }
-    }
-    return map;
-  }, [generatedBudgetAvailable, budgetEmpresaData, fEmpresa, selectedMonthKeys]);
+  const generatedBudgetValueForPlano = (plano, empresaFiltro = "Todas", monthKeySet = null, fallbackRealValue = 0) => {
+    return generatedBudgetMetaForPlano(plano, empresaFiltro, monthKeySet, fallbackRealValue).valor;
+  };
 
 // { [plano]: { value?: string, pct?: string } }
 
@@ -806,13 +1016,11 @@ const sanitizeNumericText = (s) => {
     const p = String(plano).trim().toLowerCase();
 
     if (p === "outros") {
-      setDrillPlano(null);
-      setOutrosOpen(true);
+      openOutrosStandalone();
       return;
     }
 
-    setOutrosOpen(false);
-    setDrillPlano(plano);
+    openDrillStandalone(plano);
   };
 
 
@@ -827,6 +1035,8 @@ const sanitizeNumericText = (s) => {
   const [statusModalOpen, setStatusModalOpen] = useState(false);
   const [statusModalKey, setStatusModalKey] = useState("over");
   const [statusModalQuery, setStatusModalQuery] = useState("");
+  const [statusStandaloneRows, setStatusStandaloneRows] = useState([]);
+  const [standaloneView, setStandaloneView] = useState(() => getStandaloneBootParams().view);
 
   useEffect(() => {
     try {
@@ -868,6 +1078,72 @@ useEffect(() => {
     try {
       const sp = new URLSearchParams(window.location.search);
       setBudgetStandalone(sp.get("orcamentos") === "1");
+      const view = sp.get("view") || "";
+      setStandaloneView(view);
+
+      const rawFilters = localStorage.getItem(VIEW_FILTERS_LS_KEY);
+      if (rawFilters) {
+        const saved = JSON.parse(rawFilters);
+        if (typeof saved?.busca === "string") setBusca(saved.busca);
+        if (typeof saved?.fEmpresa === "string") setFEmpresa(saved.fEmpresa);
+        if (typeof saved?.fPlano === "string") setFPlano(saved.fPlano);
+        if (Array.isArray(saved?.mesesSel)) setMesesSel(saved.mesesSel);
+      }
+
+      if (view === "drill") {
+        const rawDrill = localStorage.getItem(DRILL_VIEW_LS_KEY);
+        if (rawDrill) {
+          const parsed = JSON.parse(rawDrill);
+          setDrillPlano(parsed?.plano || sp.get("plano") || null);
+          setDrillMes(parsed?.mes || sp.get("mes") || "");
+          if (typeof parsed?.empresa === "string" && parsed.empresa) {
+            setFEmpresa(parsed.empresa);
+          }
+          if (Array.isArray(parsed?.mesesSel)) {
+            setMesesSel(parsed.mesesSel);
+          }
+          if (Array.isArray(parsed?.rows)) {
+            setDetailRows(parsed.rows);
+            setDetailTitle(parsed?.title || "");
+          }
+        } else {
+          setDrillPlano(sp.get("plano") || null);
+          setDrillMes(sp.get("mes") || "");
+        }
+      }
+
+      if (view === "status") {
+        setStatusModalKey(sp.get("status") || "over");
+        setStatusModalQuery("");
+        const rawStatus = localStorage.getItem(STATUS_VIEW_LS_KEY);
+        if (rawStatus) {
+          const parsed = JSON.parse(rawStatus);
+          if (parsed?.statusKey) setStatusModalKey(parsed.statusKey);
+          if (Array.isArray(parsed?.rows)) setStatusStandaloneRows(parsed.rows);
+          if (parsed?.title) setDetailTitle(parsed.title);
+        }
+      }
+
+      if (view === "outros") {
+        const rawOutros = localStorage.getItem(OUTROS_VIEW_LS_KEY);
+        if (rawOutros) {
+          const parsed = JSON.parse(rawOutros);
+          if (Array.isArray(parsed?.rows)) {
+            setDetailRows(parsed.rows);
+            setDetailTitle(parsed?.title || "Detalhamento — Outros");
+          }
+        }
+      }
+
+      if (view === "detail") {
+        const rawDetail = localStorage.getItem(DETAIL_VIEW_LS_KEY);
+        if (rawDetail) {
+          const parsed = JSON.parse(rawDetail);
+          setDetailTitle(parsed?.title || "Detalhes");
+          setDetailRows(Array.isArray(parsed?.rows) ? parsed.rows : []);
+          setDetailQuery("");
+        }
+      }
     } catch {}
   }, []);
 
@@ -1022,6 +1298,182 @@ useEffect(() => {
           meta: fileMeta,
         })
       );
+    } catch {}
+  }
+
+  function persistViewFilters() {
+    try {
+      localStorage.setItem(
+        VIEW_FILTERS_LS_KEY,
+        JSON.stringify({ busca, fEmpresa, fPlano, mesesSel })
+      );
+    } catch {}
+  }
+
+  function returnToDashboardFromStandalone() {
+    try {
+      if (window.opener && !window.opener.closed) {
+        try { window.opener.focus(); } catch {}
+        try { window.close(); } catch {}
+        return;
+      }
+    } catch {}
+    try {
+      window.location.href = window.location.pathname;
+    } catch {}
+  }
+
+  function openStandaloneView(view, params = {}) {
+    try {
+      persistViewFilters();
+      const sp = new URLSearchParams();
+      sp.set("view", view);
+      Object.entries(params || {}).forEach(([k, v]) => {
+        if (v != null && v !== "") sp.set(k, String(v));
+      });
+      const url = `${window.location.pathname}?${sp.toString()}`;
+      const win = window.open(url, "_blank");
+      try { win?.focus?.(); } catch {}
+    } catch {}
+  }
+
+  function openOutrosStandalone() {
+    try {
+      persistViewFilters();
+      localStorage.setItem(OUTROS_VIEW_LS_KEY, JSON.stringify({
+        title: "Detalhamento — Outros",
+        rows: Array.isArray(outrosDetalhe?.rows) ? outrosDetalhe.rows : [],
+      }));
+      const url = `${window.location.pathname}?view=outros`;
+      const win = window.open(url, "_blank");
+      try { win?.focus?.(); } catch {}
+    } catch {}
+  }
+
+  function openDrillStandalone(plano, mes = "") {
+    if (!plano) return;
+    try {
+      persistViewFilters();
+
+      let sourceRows = [];
+      try {
+        const rawDataset = localStorage.getItem(LS_KEY);
+        const parsedDataset = rawDataset ? JSON.parse(rawDataset) : null;
+        sourceRows = Array.isArray(parsedDataset?.rows) ? parsedDataset.rows : [];
+      } catch {
+        sourceRows = [];
+      }
+
+      if (!sourceRows.length && Array.isArray(rows) && rows.length) {
+        sourceRows = rows;
+      }
+
+      let empresaAtual = "Todas";
+      let mesesAtuais = [];
+      try {
+        const rawFilters = localStorage.getItem(VIEW_FILTERS_LS_KEY);
+        const parsedFilters = rawFilters ? JSON.parse(rawFilters) : null;
+        if (typeof parsedFilters?.fEmpresa === "string" && parsedFilters.fEmpresa) {
+          empresaAtual = parsedFilters.fEmpresa;
+        } else if (typeof fEmpresa === "string" && fEmpresa) {
+          empresaAtual = fEmpresa;
+        }
+        if (Array.isArray(parsedFilters?.mesesSel)) {
+          mesesAtuais = parsedFilters.mesesSel;
+        } else if (Array.isArray(mesesSel)) {
+          mesesAtuais = mesesSel;
+        }
+      } catch {}
+
+      let baseRows = sourceRows.filter((r) => {
+        if (r.plano !== plano) return false;
+
+        const empresaOk = empresaAtual === "Todas" ? true : r.empresa === empresaAtual;
+        if (!empresaOk) return false;
+
+        if (mesesAtuais.length) {
+          const mi = mesIndexFromISO(r.data ?? r.competencia);
+          if (!mesesAtuais.includes(mi)) return false;
+        }
+
+        return true;
+      });
+
+      if (!baseRows.length) {
+        const alvo = normalizePlanoBudgetKey(plano);
+        baseRows = sourceRows.filter((r) => {
+          if (normalizePlanoBudgetKey(r.plano) !== alvo) return false;
+
+          const empresaOk = empresaAtual === "Todas" ? true : r.empresa === empresaAtual;
+          if (!empresaOk) return false;
+
+          if (mesesAtuais.length) {
+            const mi = mesIndexFromISO(r.data ?? r.competencia);
+            if (!mesesAtuais.includes(mi)) return false;
+          }
+
+          return true;
+        });
+      }
+
+      localStorage.setItem(
+        DRILL_VIEW_LS_KEY,
+        JSON.stringify({
+          plano,
+          mes,
+          title: `Detalhamento — ${plano}`,
+          rows: baseRows,
+          empresa: empresaAtual,
+          mesesSel: mesesAtuais,
+        })
+      );
+
+      const sp = new URLSearchParams();
+      sp.set("view", "drill");
+      sp.set("plano", String(plano));
+      if (mes) sp.set("mes", String(mes));
+
+      const url = `${window.location.pathname}?${sp.toString()}`;
+      const win = window.open(url, "_blank");
+      try { win?.focus?.(); } catch {}
+    } catch (e) {
+      console.error("openDrillStandalone", e);
+    }
+  }
+
+  function openStatusStandalone(statusKey) {
+    try {
+      persistViewFilters();
+
+      const finalKey = String(statusKey || "over");
+      const snapshotRows = statusPlanos
+        .filter((p) => p.statusKey === finalKey)
+        .map((p) => ({ ...p }));
+
+      localStorage.setItem(
+        STATUS_VIEW_LS_KEY,
+        JSON.stringify({
+          statusKey: finalKey,
+          title: `Planos por status`,
+          rows: snapshotRows,
+        })
+      );
+
+      const url = `${window.location.pathname}?view=status&status=${encodeURIComponent(finalKey)}`;
+      const win = window.open(url, "_blank");
+      try { win?.focus?.(); } catch {}
+    } catch (e) {
+      console.error("openStatusStandalone", e);
+    }
+  }
+
+  function openDetailStandalone(title, rows) {
+    try {
+      persistViewFilters();
+      localStorage.setItem(DETAIL_VIEW_LS_KEY, JSON.stringify({ title, rows }));
+      const url = `${window.location.pathname}?view=detail`;
+      const win = window.open(url, "_blank");
+      try { win?.focus?.(); } catch {}
     } catch {}
   }
 
@@ -1285,6 +1737,13 @@ const clearAllBudgets = () => {
     return { key: "ok", label: "Dentro", cls: "bg-emerald-500/20 text-emerald-200 border-emerald-400/30" };
   };
 
+  const budgetStatusColor = (row) => {
+    const st = budgetStatus(row?.valor, row?.budget);
+    if (st.key === "over") return C_ROSE;
+    if (st.key === "warn") return C_AMBER;
+    return C_BLUE;
+  };
+
   // ------------------------
   // Status visual por plano (considera meses + busca, mas IGNORA o filtro de plano)
   // - Previsto em R$ é tratado como mensal (multiplica pela quantidade de meses do período)
@@ -1357,51 +1816,103 @@ const clearAllBudgets = () => {
     return Array.from(s).filter(Boolean);
   }, [filtered]);
 
+  const realMapByPlano = useMemo(() => {
+    const map = new Map();
+    for (const r of filtered) {
+      const plano = String(r.plano ?? "");
+      map.set(plano, (map.get(plano) ?? 0) + (r.valor || 0));
+    }
+    return map;
+  }, [filtered]);
+
+  const generatedBudgetTotal = useMemo(() => {
+    if (!generatedBudgetAvailable) return 0;
+    return contasNoFiltro.reduce(
+      (acc, plano) => acc + generatedBudgetValueForPlano(plano, fEmpresa, selectedMonthKeys, realMapByPlano.get(plano) ?? 0),
+      0
+    );
+  }, [generatedBudgetAvailable, contasNoFiltro, fEmpresa, selectedMonthKeys, realMapByPlano]);
+
+  const generatedBudgetByMes = useMemo(() => {
+    const map = new Map();
+    if (!generatedBudgetAvailable) return map;
+
+    for (const plano of contasNoFiltro) {
+      const match = resolvePlanoMatch(plano, budgetDrePlanos, planoMatchMap);
+      if (match?.matched) {
+        const normalized = normalizePlanoBudgetKey(match.matched);
+        const items = budgetEmpresaIndex.get(normalized) || [];
+        let matchedTotal = 0;
+
+        for (const item of items) {
+          if (!budgetEmpresaMatchesFilter(item?.empresa, fEmpresa)) continue;
+          for (const [mes, mm] of Object.entries(item?.months || {})) {
+            const mesNum = String(mes).split("-")[1] || "";
+            if (selectedMonthKeys && !selectedMonthKeys.has(mesNum)) continue;
+            const previstoMes = Number(mm?.previsto || 0);
+            matchedTotal += previstoMes;
+            map.set(mes, (map.get(mes) || 0) + previstoMes);
+          }
+        }
+
+        if (matchedTotal > 0) continue;
+      }
+
+      for (const r of filtered) {
+        if (String(r?.plano ?? "") !== plano) continue;
+        const mes = monthKey(r?.data);
+        const mesNum = String(mes).split("-")[1] || "";
+        if (selectedMonthKeys && !selectedMonthKeys.has(mesNum)) continue;
+        map.set(mes, (map.get(mes) || 0) + Number(r?.valor || 0) * 0.9);
+      }
+    }
+    return map;
+  }, [generatedBudgetAvailable, contasNoFiltro, budgetEmpresaIndex, budgetDrePlanos, planoMatchMap, fEmpresa, selectedMonthKeys, filtered]);
+
+
 
   const previstoTotal = useMemo(() => {
+    if (generatedBudgetAvailable) return generatedBudgetTotal;
     return contasNoFiltro.reduce((acc, c) => acc + budgetValueForPlano(c), 0);
-  }, [contasNoFiltro, budgets, totalGeral]);
+  }, [generatedBudgetAvailable, generatedBudgetTotal, contasNoFiltro, budgets, totalGeral]);
 
   const execPct = useMemo(() => (previstoTotal ? (totalGeral / previstoTotal) * 100 : 0), [totalGeral, previstoTotal]);
   const diffBudget = useMemo(() => totalGeral - previstoTotal, [totalGeral, previstoTotal]);
 
   const statusCounts = useMemo(() => {
-    const realMap = new Map();
-    for (const r of filtered) {
-      const k = String(r.plano ?? "");
-      realMap.set(k, (realMap.get(k) ?? 0) + (r.valor || 0));
-    }
     const counts = { ok: 0, warn: 0, over: 0, none: 0 };
     for (const k of contasNoFiltro) {
-      const real = realMap.get(k) ?? 0;
-      const prev = budgetValueForPlano(k);
+      const real = realMapByPlano.get(k) ?? 0;
+      const prev = generatedBudgetAvailable ? generatedBudgetValueForPlano(k, fEmpresa, selectedMonthKeys, real) : budgetValueForPlano(k);
       const st = budgetStatus(real, prev).key;
       counts[st] = (counts[st] ?? 0) + 1;
     }
     return counts;
-  }, [filtered, contasNoFiltro, budgets, totalGeral]);
+  }, [contasNoFiltro, generatedBudgetAvailable, fEmpresa, selectedMonthKeys, realMapByPlano, budgets, totalGeral, budgetEmpresaIndex, budgetDrePlanos, planoMatchMap]);
 
   const statusPlanos = useMemo(() => {
     // Gera lista de planos com Real/Previsto/Execução e Status, respeitando filtros atuais
-    const realMap = new Map();
-    for (const r of filtered) {
-      const k = String(r.plano ?? "");
-      realMap.set(k, (realMap.get(k) ?? 0) + (r.valor || 0));
-    }
-
     const arr = [];
     for (const plano of contasNoFiltro) {
-      const real = realMap.get(plano) ?? 0;
-      const previsto = budgetValueForPlano(plano);
-      const st = budgetStatus(real, previsto); // { key, label, emoji, className }
+      const real = realMapByPlano.get(plano) ?? 0;
+      const budgetMeta = generatedBudgetAvailable
+        ? generatedBudgetMetaForPlano(plano, fEmpresa, selectedMonthKeys, real)
+        : { valor: budgetValueForPlano(plano), estimado: false };
+      const previsto = Number(budgetMeta?.valor || 0);
+      const st = budgetStatus(real, previsto);
+      const matchInfo = planoMatchDiagnostics?.[plano] || { matched: null, confidence: 0, mode: "unmatched" };
       arr.push({
         plano,
         real,
         previsto,
+        previstoEstimado: Boolean(budgetMeta?.estimado),
         execPct: previsto ? (real / previsto) * 100 : 0,
         statusKey: st.key,
         statusLabel: st.label,
-        statusEmoji: st.emoji,
+        statusEmoji: st.key === "ok" ? "🟢" : st.key === "warn" ? "🟡" : st.key === "over" ? "🔴" : "⚪",
+        matchMode: matchInfo.mode,
+        matchedPlano: matchInfo.matched || "",
+        matchConfidence: Number(matchInfo.confidence || 0),
       });
     }
 
@@ -1411,7 +1922,6 @@ const clearAllBudgets = () => {
       const ra = rank[a.statusKey] ?? 9;
       const rb = rank[b.statusKey] ?? 9;
       if (ra !== rb) return ra - rb;
-      // prioriza maior % de execução e depois maior real
       const ea = Number.isFinite(a.execPct) ? a.execPct : 0;
       const eb = Number.isFinite(b.execPct) ? b.execPct : 0;
       if (eb !== ea) return eb - ea;
@@ -1419,16 +1929,21 @@ const clearAllBudgets = () => {
     });
 
     return arr;
-  }, [filtered, contasNoFiltro, budgets, totalGeral]);
+  }, [contasNoFiltro, generatedBudgetAvailable, fEmpresa, selectedMonthKeys, budgetEmpresaIndex, budgetDrePlanos, planoMatchMap, planoMatchDiagnostics, realMapByPlano, budgets, totalGeral]);
 
   const statusPlanosFiltered = useMemo(() => {
     const q = (statusModalQuery || "").trim().toLowerCase();
-    return statusPlanos.filter((p) => {
+    const base =
+      standaloneView === "status" && Array.isArray(statusStandaloneRows) && statusStandaloneRows.length
+        ? statusStandaloneRows
+        : statusPlanos;
+
+    return base.filter((p) => {
       if (p.statusKey !== statusModalKey) return false;
       if (!q) return true;
       return String(p.plano || "").toLowerCase().includes(q);
     });
-  }, [statusPlanos, statusModalKey, statusModalQuery]);
+  }, [standaloneView, statusStandaloneRows, statusPlanos, statusModalKey, statusModalQuery]);
 
   // Quando o total muda, recalcula o outro campo automaticamente
   useEffect(() => {
@@ -1468,11 +1983,11 @@ const clearAllBudgets = () => {
     const total = arr.reduce((a, b) => a + (b.valor || 0), 0);
     return arr.map((d) => ({
       ...d,
-      budget: budgetValueForPlano(d.plano),
+      budget: generatedBudgetAvailable ? generatedBudgetValueForPlano(d.plano, fEmpresa, selectedMonthKeys, d.valor) : budgetValueForPlano(d.plano),
       pct: total ? (d.valor / total) * 100 : 0,
       pctLabel: total ? `${((d.valor / total) * 100).toFixed(1)}%` : "0.0%",
     }));
-  }, [filtered]);
+  }, [filtered, generatedBudgetAvailable, budgetEmpresaData, fEmpresa, selectedMonthKeys, budgets]);
 
   const topPlanos = useMemo(() => byPlano.slice(0, 10), [byPlano]);
 
@@ -1489,15 +2004,14 @@ const clearAllBudgets = () => {
 
   const byMesBudget = useMemo(() => {
     if (!byMes.length) return byMes;
-    // Orçado por mês: soma dos orçamentos por plano.
-    // - Orçamento em % é aplicado sobre o total do mês.
-    // - Orçamento em R$ é considerado mensal (valor fixo) para cada mês.
     return byMes.map((it) => {
       const totalMes = Number(it.valor ?? 0) || 0;
-      const orcado = contasNoFiltro.reduce((acc, c) => acc + budgetValueForPlanoMes(c, totalMes, byMes.length), 0);
-      return { ...it, orcado };
+      const orcado = generatedBudgetAvailable
+        ? (generatedBudgetByMes.get(it.mes) || 0)
+        : contasNoFiltro.reduce((acc, c) => acc + budgetValueForPlanoMes(c, totalMes, byMes.length), 0);
+      return { ...it, orcado, budget: orcado };
     });
-  }, [byMes, contasNoFiltro, budgets]);
+  }, [byMes, contasNoFiltro, budgets, generatedBudgetAvailable, generatedBudgetByMes]);
 
   // Seed automático de orçamentos (só na primeira vez, se não houver nada salvo)
   useEffect(() => {
@@ -1567,10 +2081,9 @@ const clearAllBudgets = () => {
   // Quando selecionar meses (Jan/Fev/Mar...), mostramos LINHAS por mês (comparativo entre anos)
   // Ex.: seleciona Jan e Fev -> 2 linhas (Jan e Fev) com cores diferentes; eixo X = ano.
   const byAnoMesLinhas = useMemo(() => {
-    if (!mesesSel.length) return { data: [], keys: [] };
+    if (!mesesSel.length) return { data: [], keys: [], budgetKeys: [] };
 
-    // soma por ano + mês (mês baseado no vencimento)
-    const acc = new Map(); // year -> { year, "Jan": val, ... }
+    const acc = new Map();
     for (const r of filtered) {
       const iso = r.data;
       if (!iso) continue;
@@ -1586,14 +2099,30 @@ const clearAllBudgets = () => {
       obj[label] = (obj[label] ?? 0) + (r.valor || 0);
     }
 
-    const data = Array.from(acc.values()).sort((a, b) => (a.ano > b.ano ? 1 : -1));
-    const keys = mesesSel
-      .slice()
-      .sort((a, b) => a - b)
-      .map((mi) => MESES_LABEL[mi] || `M${mi + 1}`);
+    if (generatedBudgetAvailable) {
+      for (const item of Object.values(budgetEmpresaData?.entries || {})) {
+        if (!budgetEmpresaMatchesFilter(item?.empresa, fEmpresa)) continue;
+        for (const [mes, mm] of Object.entries(item?.months || {})) {
+          const p = String(mes).split("-");
+          if (p.length < 2) continue;
+          const year = p[0];
+          const mi = Number(p[1]) - 1;
+          if (!mesesSel.includes(mi)) continue;
 
-    return { data, keys };
-  }, [filtered, mesesSel]);
+          const label = MESES_LABEL[mi] || `M${mi + 1}`;
+          const budgetLabel = `${label} Previsto`;
+          if (!acc.has(year)) acc.set(year, { ano: year });
+          const obj = acc.get(year);
+          obj[budgetLabel] = (obj[budgetLabel] ?? 0) + Number(mm?.previsto || 0);
+        }
+      }
+    }
+
+    const data = Array.from(acc.values()).sort((a, b) => (a.ano > b.ano ? 1 : -1));
+    const keys = mesesSel.slice().sort((a, b) => a - b).map((mi) => MESES_LABEL[mi] || `M${mi + 1}`);
+    const budgetKeys = generatedBudgetAvailable ? keys.map((k) => `${k} Previsto`) : [];
+    return { data, keys, budgetKeys };
+  }, [filtered, mesesSel, generatedBudgetAvailable, budgetEmpresaData, fEmpresa]);
 
 
   const pieData = useMemo(() => {
@@ -1671,8 +2200,31 @@ const outrosPlanos = useMemo(() => {
   // ------------------------
   const drillRowsBase = useMemo(() => {
     if (!drillPlano) return [];
-    return filtered.filter((r) => r.plano === drillPlano);
-  }, [filtered, drillPlano]);
+    if (standaloneView === "drill" && Array.isArray(detailRows) && detailRows.length) {
+      return detailRows.filter((r) => {
+        if (r.plano !== drillPlano) return false;
+        if (mesesSel.length) {
+          const mi = mesIndexFromISO(r.data ?? r.competencia);
+          if (!mesesSel.includes(mi)) return false;
+        }
+        return true;
+      });
+    }
+    return rows.filter((r) => {
+      const planoOk = r.plano === drillPlano;
+      if (!planoOk) return false;
+
+      const empresaOk = fEmpresa === "Todas" ? true : r.empresa === fEmpresa;
+      if (!empresaOk) return false;
+
+      if (mesesSel.length) {
+        const mi = mesIndexFromISO(r.data ?? r.competencia);
+        if (!mesesSel.includes(mi)) return false;
+      }
+
+      return true;
+    });
+  }, [rows, drillPlano, fEmpresa, mesesSel, standaloneView, detailRows]);
 
   const drillMesOptions = useMemo(() => {
     if (!drillRowsBase.length) return [];
@@ -1719,10 +2271,13 @@ const outrosPlanos = useMemo(() => {
   }
 
   function openDetail(title, rows) {
-    setDetailTitle(title);
-    setDetailRows(rows);
-    setDetailQuery("");
-    setDetailOpen(true);
+    openDetailStandalone(title, rows);
+  }
+
+  function openStatusPlanoDetail(plano) {
+    const planoNome = typeof plano === "string" ? plano : plano?.plano;
+    if (!planoNome) return;
+    openDrillStandalone(planoNome, "");
   }
 
   const drillByFornecedor = useMemo(() => aggTop(drillRows, "fornecedor", 12), [drillRows]);
@@ -1758,6 +2313,31 @@ const outrosPlanos = useMemo(() => {
   }, [drillRowsBase, byMes, drillPlano, budgets, totalGeral]);
 
 
+
+  const detailRowsFiltered = useMemo(() => {
+    const base = Array.isArray(detailRows) ? detailRows : [];
+    const q = String(detailQuery || "").trim().toLowerCase();
+
+    if (!q) return base;
+
+    return base.filter((r) => {
+      const hay = [
+        r?.data,
+        r?.competencia,
+        r?.plano,
+        r?.conta,
+        r?.empresa,
+        r?.fornecedor,
+        r?.status,
+        String(r?.valor ?? ""),
+      ]
+        .join(" ")
+        .toLowerCase();
+
+      return hay.includes(q);
+    });
+  }, [detailRows, detailQuery]);
+
   const budgetEmpresaCompanies = useMemo(() => {
     const set = new Set();
     for (const item of Object.values(budgetEmpresaData?.entries || {})) {
@@ -1766,22 +2346,356 @@ const outrosPlanos = useMemo(() => {
     return Array.from(set).sort();
   }, [budgetEmpresaData]);
 
+  const budgetEmpresaMonths = useMemo(() => {
+    const set = new Set();
+    for (const item of Object.values(budgetEmpresaData?.entries || {})) {
+      for (const mes of Object.keys(item?.months || {})) {
+        set.add(String(mes));
+      }
+    }
+    return Array.from(set).sort();
+  }, [budgetEmpresaData]);
+
   const budgetEmpresaRows = useMemo(() => {
     const map = {};
+    const q = String(budgetQuery || "").trim().toLowerCase();
+
     for (const item of Object.values(budgetEmpresaData?.entries || {})) {
+      const empresa = String(item?.empresa || "");
+      if (budgetEmpresaFilter !== "Todas" && empresa !== budgetEmpresaFilter) continue;
+
       const plano = String(item?.plano || "");
       const key = normKey(plano);
+
       if (!map[key]) map[key] = { plano, values: {}, total: 0 };
       map[key].plano = plano;
-      map[key].values[item.empresa] = Number(item.totalPrevisto || 0);
-      map[key].total += Number(item.totalPrevisto || 0);
+
+      let totalItem = 0;
+      if (budgetMesFilter !== "Todos") {
+        totalItem = Number(item?.months?.[budgetMesFilter]?.previsto || 0);
+      } else {
+        totalItem = Number(item?.totalPrevisto || 0);
+      }
+
+      map[key].values[empresa] = (map[key].values[empresa] || 0) + totalItem;
+      map[key].total += totalItem;
     }
-    const q = String(budgetQuery || "").trim().toLowerCase();
+
     return Object.values(map)
       .filter((r) => !q || String(r.plano).toLowerCase().includes(q))
       .sort((a, b) => String(a.plano).localeCompare(String(b.plano), "pt-BR"));
-  }, [budgetEmpresaData, budgetQuery]);
+  }, [budgetEmpresaData, budgetQuery, budgetEmpresaFilter, budgetMesFilter]);
 
+  const budgetEmpresaCompaniesVisible = useMemo(() => {
+    if (budgetEmpresaFilter !== "Todas") return [budgetEmpresaFilter];
+    return budgetEmpresaCompanies;
+  }, [budgetEmpresaCompanies, budgetEmpresaFilter]);
+
+  async function exportBudgetEmpresaXlsx() {
+    try {
+      const mod = await import("xlsx");
+      const XLSX = mod.default ?? mod;
+      const wb = XLSX.utils.book_new();
+
+      const companiesForExport = budgetEmpresaFilter !== "Todas" ? [budgetEmpresaFilter] : budgetEmpresaCompanies;
+      for (const empresa of companiesForExport) {
+        const rowsExport = [];
+
+        for (const item of Object.values(budgetEmpresaData?.entries || {})) {
+          if (String(item?.empresa || "") !== String(empresa)) continue;
+          if (budgetMesFilter !== "Todos") {
+            const prev = Number(item?.months?.[budgetMesFilter]?.previsto || 0);
+            if (!prev) continue;
+            rowsExport.push({
+              Empresa: empresa,
+              Plano: String(item?.plano || ""),
+              Mês: budgetMesFilter,
+              Previsto: prev,
+            });
+          } else {
+            for (const [mes, mm] of Object.entries(item?.months || {})) {
+              const prev = Number(mm?.previsto || 0);
+              if (!prev) continue;
+              rowsExport.push({
+                Empresa: empresa,
+                Plano: String(item?.plano || ""),
+                Mês: mes,
+                Previsto: prev,
+              });
+            }
+          }
+        }
+
+        rowsExport.sort((a, b) => {
+          const c1 = String(a.Plano).localeCompare(String(b.Plano), "pt-BR");
+          if (c1 !== 0) return c1;
+          return String(a.Mês).localeCompare(String(b.Mês), "pt-BR");
+        });
+
+        const ws = XLSX.utils.json_to_sheet(rowsExport.length ? rowsExport : [{ Empresa: empresa, Plano: "", Mês: "", Previsto: 0 }]);
+        XLSX.utils.book_append_sheet(wb, ws, String(empresa).slice(0, 31));
+      }
+
+      const filename = `orcamento_por_empresa_${budgetMesFilter !== "Todos" ? budgetMesFilter : "completo"}.xlsx`;
+      XLSX.writeFile(wb, filename);
+    } catch (e) {
+      console.error(e);
+      alert("Não foi possível exportar o XLSX.");
+    }
+  }
+
+
+  if (standaloneView === "status") {
+    return (
+      <div className="min-h-screen bg-[#0c1118] text-white">
+        <header className="sticky top-0 z-20 border-b border-white/10 bg-[#0c1118]/90 backdrop-blur px-6 py-4">
+          <div className="max-w-7xl mx-auto flex items-center justify-between gap-3">
+            <div>
+              <div className="text-lg font-semibold text-white/90">Planos por status</div>
+              <div className="text-[12px] text-white/60">{statusPlanosFiltered.length} plano(s) • visualização aberta em nova guia</div>
+            </div>
+            <button type="button" onClick={returnToDashboardFromStandalone} className="px-3 py-2 rounded-lg text-sm border bg-white/5 border-white/10 text-white/80 hover:bg-white/10">← Voltar</button>
+          </div>
+        </header>
+        <main className="max-w-7xl mx-auto px-6 py-6 space-y-4">
+          <Card title={`Status: ${statusModalKey === "ok" ? "Dentro" : statusModalKey === "warn" ? "Atenção" : statusModalKey === "over" ? "Estourado" : "Sem orçamento"}`}>
+            <div className="mb-3">
+              <input value={statusModalQuery} onChange={(e) => setStatusModalQuery(e.target.value)} placeholder="Buscar plano..." className="w-80 max-w-full rounded-xl bg-white/5 border border-white/10 px-3 py-2 text-sm text-white/80 outline-none focus:border-white/20" />
+            </div>
+            <div className="overflow-auto rounded-xl border border-white/10">
+              <table className="min-w-[760px] w-full text-sm">
+                <thead className="bg-white/5 text-white/70"><tr><th className="text-left font-medium px-3 py-2">Status</th><th className="text-left font-medium px-3 py-2">Plano</th><th className="text-right font-medium px-3 py-2">Previsto</th><th className="text-right font-medium px-3 py-2">Real</th><th className="text-right font-medium px-3 py-2">Execução</th><th className="text-right font-medium px-3 py-2">Ações</th></tr></thead>
+                <tbody>
+                  {statusPlanosFiltered.map((p) => (
+                    <tr key={p.plano} className="border-t border-white/10 hover:bg-white/5">
+                      <td className="px-3 py-2 text-white/80"><span className="mr-2">{p.statusEmoji}</span><span className="text-[12px]">{p.statusLabel}</span></td>
+                      <td className="px-3 py-2 text-white/90">
+                        <button type="button" onClick={() => openStatusPlanoDetail(p)} className="text-left text-white/90 hover:text-sky-200 hover:underline underline-offset-4">{p.plano}</button>
+                      </td>
+                      <td className="px-3 py-2 text-right text-white/80">{p.previsto ? fmtBRL(p.previsto) : "—"}</td>
+                      <td className="px-3 py-2 text-right text-white/80">{fmtBRL(p.real)}</td>
+                      <td className="px-3 py-2 text-right">{p.previsto ? <span className={`${p.execPct > 100 ? "text-rose-200" : p.execPct >= 90 ? "text-amber-200" : "text-emerald-200"} font-medium`}>{p.execPct.toFixed(1)}%</span> : <span className="text-white/50">—</span>}</td>
+                      <td className="px-3 py-2 text-right"><button type="button" onClick={() => openStatusPlanoDetail(p)} className="px-3 py-1.5 rounded-xl border border-white/10 bg-white/5 hover:bg-white/10 text-[12px] text-white/80">Abrir detalhe</button></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+        </main>
+      </div>
+    );
+  }
+
+  if (standaloneView === "outros") {
+    return (
+      <div className="min-h-screen bg-[#0c1118] text-white">
+        <header className="sticky top-0 z-20 border-b border-white/10 bg-[#0c1118]/90 backdrop-blur px-6 py-4">
+          <div className="max-w-7xl mx-auto flex items-center justify-between gap-3">
+            <div><div className="text-lg font-semibold text-white/90">Detalhamento — Outros</div><div className="text-[12px] text-white/60">Planos agrupados em outros</div></div>
+            <button type="button" onClick={returnToDashboardFromStandalone} className="px-3 py-2 rounded-lg text-sm border bg-white/5 border-white/10 text-white/80 hover:bg-white/10">← Voltar</button>
+          </div>
+        </header>
+        <main className="max-w-7xl mx-auto px-6 py-6 space-y-4">
+          <Card title="Lista completa">
+            <div className="mb-3 text-white/80">Total: {fmtBRL((Array.isArray(detailRows) && detailRows.length ? detailRows : outrosDetalhe.rows).reduce((acc, d) => acc + (Number(d?.valor || 0)), 0) || 0)}</div>
+            <div className="max-h-[70vh] overflow-auto rounded-lg border border-white/10">
+              {(Array.isArray(detailRows) && detailRows.length ? detailRows : outrosDetalhe.rows).map((d, i) => (
+                <button key={`${d.plano}-${i}`} type="button" onClick={() => openDrillStandalone(d.plano)} className="w-full text-left px-3 py-2 hover:bg-white/5 flex items-center gap-2 border-b border-white/5 last:border-b-0">
+                  <span className="truncate text-white/80">{d.plano}</span>
+                  <span className="ml-auto text-white/70">{fmtBRL(d.valor)}</span>
+                  <span className="text-white/50 text-xs w-[56px] text-right">{d.pctLabel || ""}</span>
+                </button>
+              ))}
+            </div>
+          </Card>
+        </main>
+      </div>
+    );
+  }
+
+  if (standaloneView === "drill" && drillPlano) {
+    return (
+      <div className="min-h-screen bg-[#0c1118] text-white">
+        <header className="sticky top-0 z-20 border-b border-white/10 bg-[#0c1118]/90 backdrop-blur px-6 py-4">
+          <div className="max-w-7xl mx-auto flex items-center justify-between gap-3">
+            <div>
+              <div className="text-lg font-semibold text-white/90">Detalhamento — {drillPlano}</div>
+              <div className="text-[12px] text-white/60">Itens {drillCount} • Total {fmtBRL(drillTotal)}</div>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-[11px] text-white/50">Mês</span>
+              <select
+                value={drillMes}
+                onChange={(e) => setDrillMes(e.target.value)}
+                className="rounded-lg px-2 py-2 bg-white/5 border border-white/10 text-white text-xs outline-none focus:ring-2 focus:ring-sky-500/40"
+              >
+                <option value="" className="bg-[#0c1118]">Todos</option>
+                {drillMesOptions.map((m) => (
+                  <option key={m} value={m} className="bg-[#0c1118]">{m}</option>
+                ))}
+              </select>
+              <button
+                type="button"
+                onClick={returnToDashboardFromStandalone}
+                className="px-3 py-2 rounded-lg text-sm border bg-white/5 border-white/10 text-white/80 hover:bg-white/10"
+              >
+                ← Voltar
+              </button>
+            </div>
+          </div>
+        </header>
+
+        <main className="max-w-7xl mx-auto px-6 py-6 space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <Card title="Total (plano + filtros)">
+              <div className="text-2xl font-bold" style={{ color: C_GREEN }}>{fmtBRL(drillTotal)}</div>
+            </Card>
+            <Card title="Itens">
+              <div className="text-2xl font-bold text-white/90">{drillCount}</div>
+            </Card>
+            <Card title="Ticket médio">
+              <div className="text-2xl font-bold text-white/90">{fmtBRL(drillTicket)}</div>
+            </Card>
+          </div>
+
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+            <Card title="Top Fornecedores" style={{ height: 420 }}>
+              <div style={{ height: 340 }}>
+                {drillByFornecedor.length ? (
+                  <ResponsiveContainer width="100%" height={340}>
+                    <ComposedChart data={drillByFornecedor}>
+                      <CartesianGrid stroke="rgba(255,255,255,0.08)" strokeDasharray="3 3" />
+                      <XAxis dataKey="name" hide />
+                      <YAxis tick={{ fill: "rgba(255,255,255,0.65)", fontSize: 12 }} />
+                      <Tooltip cursor={false} content={<TooltipRich labelPrefix="Categoria" />} />
+                      <Bar
+                        dataKey="valor"
+                        fill={C_BLUE}
+                        radius={[10, 10, 0, 0]}
+                        onClick={(d) => {
+                          const name = d?.payload?.name ?? d?.name;
+                          if (!name) return;
+                          openDetail(`Títulos — Fornecedor: ${name}`, drillRows.filter((r) => r.fornecedor === name));
+                        }}
+                      >
+                        <LabelList dataKey="pctLabel" position="top" offset={10} fill="rgba(255,255,255,0.75)" fontSize={12} />
+                      </Bar>
+                    </ComposedChart>
+                  </ResponsiveContainer>
+                ) : (
+                  <div className="h-full grid place-items-center text-white/60 text-sm">Sem dados.</div>
+                )}
+              </div>
+            </Card>
+
+            <Card title="Top Empresas / Unidades" style={{ height: 420 }}>
+              <div style={{ height: 340 }}>
+                {drillByEmpresa.length ? (
+                  <ResponsiveContainer width="100%" height={340}>
+                    <ComposedChart data={drillByEmpresa}>
+                      <CartesianGrid stroke="rgba(255,255,255,0.08)" strokeDasharray="3 3" />
+                      <XAxis dataKey="name" hide />
+                      <YAxis tick={{ fill: "rgba(255,255,255,0.65)", fontSize: 12 }} />
+                      <Tooltip cursor={false} content={<TooltipRich labelPrefix="Categoria" />} />
+                      <Bar
+                        dataKey="valor"
+                        fill={C_PURPLE}
+                        radius={[10, 10, 0, 0]}
+                        onClick={(d) => {
+                          const name = d?.payload?.name ?? d?.name;
+                          if (!name) return;
+                          openDetail(`Títulos — Empresa/Unidade: ${name}`, drillRows.filter((r) => r.empresa === name));
+                        }}
+                      >
+                        <LabelList dataKey="pctLabel" position="top" offset={10} fill="rgba(255,255,255,0.75)" fontSize={12} />
+                      </Bar>
+                    </ComposedChart>
+                  </ResponsiveContainer>
+                ) : (
+                  <div className="h-full grid place-items-center text-white/60 text-sm">Sem dados.</div>
+                )}
+              </div>
+            </Card>
+
+            <Card title="Top Contas" style={{ height: 420 }}>
+              <div style={{ height: 340 }}>
+                {drillByConta.length ? (
+                  <ResponsiveContainer width="100%" height={340}>
+                    <ComposedChart data={drillByConta}>
+                      <CartesianGrid stroke="rgba(255,255,255,0.08)" strokeDasharray="3 3" />
+                      <XAxis dataKey="name" hide />
+                      <YAxis tick={{ fill: "rgba(255,255,255,0.65)", fontSize: 12 }} />
+                      <Tooltip cursor={false} content={<TooltipRich labelPrefix="Categoria" />} />
+                      <Bar
+                        dataKey="valor"
+                        fill={C_CYAN}
+                        radius={[10, 10, 0, 0]}
+                        onClick={(d) => {
+                          const name = d?.payload?.name ?? d?.name;
+                          if (!name) return;
+                          openDetail(`Títulos — Conta: ${name}`, drillRows.filter((r) => r.conta === name));
+                        }}
+                      >
+                        <LabelList dataKey="pctLabel" position="top" offset={10} fill="rgba(255,255,255,0.75)" fontSize={12} />
+                      </Bar>
+                    </ComposedChart>
+                  </ResponsiveContainer>
+                ) : (
+                  <div className="h-full grid place-items-center text-white/60 text-sm">Sem dados.</div>
+                )}
+              </div>
+            </Card>
+
+            <Card title="Evolução do Plano (por mês)" style={{ height: 420 }}>
+              <div style={{ height: 340 }}>
+                {drillByMes.length ? (
+                  <ResponsiveContainer width="100%" height={340}>
+                    <LineChart data={drillByMes}>
+                      <CartesianGrid stroke="rgba(255,255,255,0.08)" strokeDasharray="3 3" />
+                      <XAxis dataKey="mes" tick={{ fill: "rgba(255,255,255,0.65)", fontSize: 12 }} />
+                      <YAxis tick={{ fill: "rgba(255,255,255,0.65)", fontSize: 12 }} />
+                      <Tooltip cursor={false} content={<TooltipRich labelPrefix="Categoria" />} />
+                      <Line type="monotone" dataKey="previsto" name="Previsto" stroke={C_AMBER} strokeWidth={2} dot={false} strokeDasharray="6 4" />
+                      <Line type="monotone" dataKey="valor" name="Real" stroke={C_GREEN} strokeWidth={3} dot={false} />
+                    </LineChart>
+                  </ResponsiveContainer>
+                ) : (
+                  <div className="h-full grid place-items-center text-white/60 text-sm">Sem dados.</div>
+                )}
+              </div>
+            </Card>
+          </div>
+
+          <div className="text-[11px] text-white/60">
+            Dica: clique nas barras dos gráficos para abrir os títulos filtrados daquele recorte.
+          </div>
+        </main>
+      </div>
+    );
+  }
+
+  if (standaloneView === "detail") {
+    const detailRowsFilteredStandalone = detailRowsFiltered;
+    return (
+      <div className="min-h-screen bg-[#0c1118] text-white">
+        <header className="sticky top-0 z-20 border-b border-white/10 bg-[#0c1118]/90 backdrop-blur px-6 py-4">
+          <div className="max-w-7xl mx-auto flex items-center justify-between gap-3">
+            <div><div className="text-lg font-semibold text-white/90">{detailTitle || "Detalhes"}</div><div className="text-[12px] text-white/60">Itens: {detailRowsFilteredStandalone.length}</div></div>
+            <button type="button" onClick={returnToDashboardFromStandalone} className="px-3 py-2 rounded-lg text-sm border bg-white/5 border-white/10 text-white/80 hover:bg-white/10">← Voltar</button>
+          </div>
+        </header>
+        <main className="max-w-7xl mx-auto px-6 py-6 space-y-4">
+          <Card title="Detalhes">
+            <div className="mb-3"><input value={detailQuery} onChange={(e) => setDetailQuery(e.target.value)} placeholder="Buscar na lista..." className="w-64 max-w-full rounded-lg px-3 py-2 bg-white/5 border border-white/10 text-white placeholder:text-white/40 outline-none focus:ring-2 focus:ring-sky-500/40 text-sm" /></div>
+            <div className="overflow-auto rounded-xl border border-white/10">
+              <table className="min-w-[1100px] w-full text-[12px]"><thead className="bg-white/5"><tr className="text-left"><th className="p-2">Venc.</th><th className="p-2">Plano</th><th className="p-2">Conta</th><th className="p-2">Empresa</th><th className="p-2">Fornecedor</th><th className="p-2">Status</th><th className="p-2 text-right">Valor</th></tr></thead><tbody>{detailRowsFilteredStandalone.map((r, i) => (<tr key={`${r.id || i}-${i}`} className="border-t border-white/10 hover:bg-white/5"><td className="p-2 text-white/70">{r.data || "—"}</td><td className="p-2 text-white/80">{r.plano || "—"}</td><td className="p-2 text-white/80">{r.conta || "—"}</td><td className="p-2 text-white/80">{r.empresa || "—"}</td><td className="p-2 text-white/80">{r.fornecedor || "—"}</td><td className="p-2 text-white/70">{r.status || "—"}</td><td className="p-2 text-right text-white/90">{fmtBRL(r.valor)}</td></tr>))}</tbody></table>
+            </div>
+          </Card>
+        </main>
+      </div>
+    );
+  }
 
   if (budgetStandalone) {
     return (
@@ -1935,18 +2849,54 @@ const outrosPlanos = useMemo(() => {
           <Card
             title="Previsto por plano e empresa"
             right={
-              <div className="w-full md:w-80">
-                <input
-                  value={budgetQuery}
-                  onChange={(e) => setBudgetQuery(e.target.value)}
-                  placeholder="Buscar plano..."
-                  className="w-full rounded-lg px-3 py-2 bg-white/5 border border-white/10 text-white placeholder:text-white/40 outline-none focus:ring-2 focus:ring-sky-500/40 text-sm"
-                />
+              <div className="w-full flex flex-col md:flex-row gap-2 md:items-end">
+                <div className="w-full md:w-72">
+                  <div className="text-[11px] text-white/60 mb-1">Buscar plano</div>
+                  <input
+                    value={budgetQuery}
+                    onChange={(e) => setBudgetQuery(e.target.value)}
+                    placeholder="Buscar plano..."
+                    className="w-full rounded-lg px-3 py-2 bg-white/5 border border-white/10 text-white placeholder:text-white/40 outline-none focus:ring-2 focus:ring-sky-500/40 text-sm"
+                  />
+                </div>
+                <div className="w-full md:w-52">
+                  <div className="text-[11px] text-white/60 mb-1">Empresa</div>
+                  <select
+                    value={budgetEmpresaFilter}
+                    onChange={(e) => setBudgetEmpresaFilter(e.target.value)}
+                    className="w-full rounded-lg px-3 py-2 bg-white/5 border border-white/10 text-white outline-none focus:ring-2 focus:ring-sky-500/40 text-sm"
+                  >
+                    <option value="Todas">Todas</option>
+                    {budgetEmpresaCompaniesVisible.map((empresa) => (
+                      <option key={empresa} value={empresa}>{empresa}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="w-full md:w-40">
+                  <div className="text-[11px] text-white/60 mb-1">Mês</div>
+                  <select
+                    value={budgetMesFilter}
+                    onChange={(e) => setBudgetMesFilter(e.target.value)}
+                    className="w-full rounded-lg px-3 py-2 bg-white/5 border border-white/10 text-white outline-none focus:ring-2 focus:ring-sky-500/40 text-sm"
+                  >
+                    <option value="Todos">Todos</option>
+                    {budgetEmpresaMonths.map((mes) => (
+                      <option key={mes} value={mes}>{mes}</option>
+                    ))}
+                  </select>
+                </div>
+                <button
+                  type="button"
+                  onClick={exportBudgetEmpresaXlsx}
+                  className="px-3 py-2 rounded-lg text-sm border bg-emerald-500/20 border-emerald-400/30 text-emerald-100 hover:bg-emerald-500/30"
+                >
+                  Exportar XLSX
+                </button>
               </div>
             }
           >
             <div className="text-[11px] text-white/60 mb-3">
-              Os valores ficam salvos neste computador e você só precisa trocar os arquivos quando quiser atualizar a base.
+              Os valores ficam salvos neste computador e você só precisa trocar os arquivos quando quiser atualizar a base. Agora você pode filtrar por empresa e por mês, além de exportar para XLSX.
             </div>
 
             <div className="rounded-xl border border-white/10 overflow-hidden">
@@ -1955,7 +2905,7 @@ const outrosPlanos = useMemo(() => {
                   <thead className="sticky top-0 bg-[#0c1118] border-b border-white/10">
                     <tr className="text-left">
                       <th className="p-2 min-w-[280px]">Plano</th>
-                      {budgetEmpresaCompanies.map((empresa) => (
+                      {budgetEmpresaCompaniesVisible.map((empresa) => (
                         <th key={empresa} className="p-2 min-w-[160px] text-right">{`Previsto ${empresa}`}</th>
                       ))}
                       <th className="p-2 min-w-[160px] text-right">Total Previsto</th>
@@ -1965,7 +2915,7 @@ const outrosPlanos = useMemo(() => {
                     {budgetEmpresaRows.map((row) => (
                       <tr key={row.plano} className="border-b border-white/5 hover:bg-white/5">
                         <td className="p-2 text-white/85">{row.plano}</td>
-                        {budgetEmpresaCompanies.map((empresa) => (
+                        {budgetEmpresaCompaniesVisible.map((empresa) => (
                           <td key={empresa} className="p-2 text-right text-white/80">
                             {fmtBRL(row.values?.[empresa] || 0)}
                           </td>
@@ -1975,7 +2925,7 @@ const outrosPlanos = useMemo(() => {
                     ))}
                     {!budgetEmpresaRows.length && (
                       <tr>
-                        <td className="p-3 text-white/60 text-sm" colSpan={Math.max(2, budgetEmpresaCompanies.length + 2)}>
+                        <td className="p-3 text-white/60 text-sm" colSpan={Math.max(2, budgetEmpresaCompaniesVisible.length + 2)}>
                           Carregue e gere a base para visualizar o previsto por empresa.
                         </td>
                       </tr>
@@ -2239,7 +3189,7 @@ const outrosPlanos = useMemo(() => {
             <div className="mt-2 flex flex-wrap gap-2 text-[11px]">
               <button
                 type="button"
-                onClick={() => { setStatusModalKey("ok"); setStatusModalQuery(""); setStatusModalOpen(true); }}
+                onClick={() => openStatusStandalone("ok")}
                 className="px-2 py-0.5 rounded-lg border border-emerald-400/30 bg-emerald-500/20 text-emerald-200 hover:bg-emerald-500/25 active:scale-[0.99] transition"
                 title="Ver planos Dentro"
               >
@@ -2247,7 +3197,7 @@ const outrosPlanos = useMemo(() => {
               </button>
               <button
                 type="button"
-                onClick={() => { setStatusModalKey("warn"); setStatusModalQuery(""); setStatusModalOpen(true); }}
+                onClick={() => openStatusStandalone("warn")}
                 className="px-2 py-0.5 rounded-lg border border-amber-400/30 bg-amber-500/20 text-amber-200 hover:bg-amber-500/25 active:scale-[0.99] transition"
                 title="Ver planos em Atenção"
               >
@@ -2255,7 +3205,7 @@ const outrosPlanos = useMemo(() => {
               </button>
               <button
                 type="button"
-                onClick={() => { setStatusModalKey("over"); setStatusModalQuery(""); setStatusModalOpen(true); }}
+                onClick={() => openStatusStandalone("over")}
                 className="px-2 py-0.5 rounded-lg border border-rose-400/30 bg-rose-500/20 text-rose-200 hover:bg-rose-500/25 active:scale-[0.99] transition"
                 title="Ver planos Estourados"
               >
@@ -2263,7 +3213,7 @@ const outrosPlanos = useMemo(() => {
               </button>
               <button
                 type="button"
-                onClick={() => { setStatusModalKey("none"); setStatusModalQuery(""); setStatusModalOpen(true); }}
+                onClick={() => openStatusStandalone("none")}
                 className="px-2 py-0.5 rounded-lg border border-white/15 bg-white/10 text-white/70 hover:bg-white/15 active:scale-[0.99] transition"
                 title="Ver planos Sem orçamento"
               >
@@ -2298,7 +3248,7 @@ const outrosPlanos = useMemo(() => {
                           onClick={() => {
                             const plano = entry?.plano;
                             if (plano) {
-                              setDrillPlano(plano);
+                              openDrillStandalone(plano);
                               setDrillMes("");
                             }
                           }}
@@ -2329,13 +3279,16 @@ const outrosPlanos = useMemo(() => {
                     <YAxis tick={{ fill: "rgba(255,255,255,0.65)", fontSize: 12 }} />
                     <Tooltip cursor={false} content={<TooltipRich labelPrefix="Categoria" />} />
                     <Bar dataKey="budget" name="Previsto" fill={C_BLUE} fillOpacity={0.18} radius={[10, 10, 0, 0]} barSize={34} />
-                        <Bar dataKey="valor" name="Real" fill={C_BLUE} radius={[10, 10, 0, 0]} barSize={22} onClick={(d) => {
+                        <Bar dataKey="valor" name="Real" radius={[10, 10, 0, 0]} barSize={22} onClick={(d) => {
                       const plano = d?.name ?? d?.payload?.plano;
                       if (plano) {
-                        setDrillPlano(plano);
+                        openDrillStandalone(plano);
                         setDrillMes("");
                       }
                     }}>
+                      {topPlanos.map((entry, i) => (
+                        <Cell key={`top-plano-${i}`} fill={budgetStatusColor(entry)} />
+                      ))}
                       <LabelList dataKey="pctLabel" position="top" offset={10} fill="rgba(255,255,255,0.75)" fontSize={12} />
                     </Bar>
                   </BarChart>
@@ -2365,6 +3318,17 @@ const outrosPlanos = useMemo(() => {
                           dataKey={k}
                           stroke={PIE_COLORS[i % PIE_COLORS.length]}
                           strokeWidth={3}
+                          dot={false}
+                        />
+                      ))}
+                      {byAnoMesLinhas.budgetKeys?.map((k, i) => (
+                        <Line
+                          key={k}
+                          type="monotone"
+                          dataKey={k}
+                          stroke={PIE_COLORS[i % PIE_COLORS.length]}
+                          strokeWidth={2}
+                          strokeDasharray="6 4"
                           dot={false}
                         />
                       ))}
@@ -2413,6 +3377,8 @@ const outrosPlanos = useMemo(() => {
 
         {/* OUTROS: detalhar planos agrupados */}
         {outrosOpen && outrosDetalhe.total > 0 && (
+          <div className="fixed inset-0 z-40 bg-[#091018] overflow-auto">
+            <div className="max-w-7xl mx-auto p-4 md:p-6">
           <Card
             title="Detalhamento — Outros"
             right={
@@ -2421,9 +3387,9 @@ const outrosPlanos = useMemo(() => {
                 <button
                   type="button"
                   onClick={() => setOutrosOpen(false)}
-                  className="px-2 py-1 rounded-lg text-xs border bg-white/5 border-white/10 text-white/80 hover:bg-white/10"
+                  className="px-3 py-2 rounded-lg text-xs border bg-white/5 border-white/10 text-white/80 hover:bg-white/10"
                 >
-                  Fechar
+                  ← Voltar
                 </button>
               </div>
             }
@@ -2470,7 +3436,7 @@ const outrosPlanos = useMemo(() => {
                   const name = d?.payload?.plano ?? d?.plano;
                   if (!name) return;
                   setOutrosOpen(false);
-                  setDrillPlano(name);
+                  openDrillStandalone(name);
                 }}
               >
                 <LabelList dataKey="pctLabel" position="right" />
@@ -2495,7 +3461,7 @@ const outrosPlanos = useMemo(() => {
             type="button"
             onClick={() => {
               setOutrosOpen(false);
-              setDrillPlano(d.plano);
+              openDrillStandalone(d.plano);
             }}
             className="w-full text-left px-3 py-2 hover:bg-white/5 flex items-center gap-2 border-b border-white/5 last:border-b-0"
             title={d.plano}
@@ -2508,9 +3474,13 @@ const outrosPlanos = useMemo(() => {
       </div>
     </div>
   </Card>
+            </div>
+          </div>
 )}
 
         {drillPlano && drillPlano !== "Outros" && (
+          <div className="fixed inset-0 z-40 bg-[#091018] overflow-auto">
+            <div className="max-w-7xl mx-auto p-4 md:p-6">
           <Card
             title={`Detalhamento — ${drillPlano}`}
             right={
@@ -2531,9 +3501,9 @@ const outrosPlanos = useMemo(() => {
 
                 <button
                   type="button"
-                  onClick={() => setDrillPlano(null)} className="px-2 py-1 rounded-lg text-xs border bg-white/5 border-white/10 text-white/80 hover:bg-white/10"
+                  onClick={() => setDrillPlano(null)} className="px-3 py-2 rounded-lg text-xs border bg-white/5 border-white/10 text-white/80 hover:bg-white/10"
                 >
-                  Fechar
+                  ← Voltar
                 </button>
               </div>
             }
@@ -2652,6 +3622,8 @@ const outrosPlanos = useMemo(() => {
               Dica: selecione um <span className="text-white/80 font-medium">mês</span> no topo do detalhamento para ver somente aquele período.
             </div>
           </Card>
+            </div>
+          </div>
         )}
 
 
@@ -2878,7 +3850,16 @@ const outrosPlanos = useMemo(() => {
                             <span className="mr-2">{p.statusEmoji}</span>
                             <span className="text-[12px]">{p.statusLabel}</span>
                           </td>
-                          <td className="px-3 py-2 text-white/90">{p.plano}</td>
+                          <td className="px-3 py-2 text-white/90">
+                            <button
+                              type="button"
+                              onClick={() => openStatusPlanoDetail(p)}
+                              className="text-left text-white/90 hover:text-sky-200 hover:underline underline-offset-4"
+                              title="Abrir detalhes do plano"
+                            >
+                              {p.plano}
+                            </button>
+                          </td>
                           <td className="px-3 py-2 text-right text-white/80">{p.previsto ? fmtBRL(p.previsto) : "—"}</td>
                           <td className="px-3 py-2 text-right text-white/80">{fmtBRL(p.real)}</td>
                           <td className="px-3 py-2 text-right">
@@ -2893,15 +3874,10 @@ const outrosPlanos = useMemo(() => {
                           <td className="px-3 py-2 text-right">
                             <button
                               type="button"
-                              onClick={() => {
-                                setStatusModalOpen(false);
-                                setDrillPlano(p.plano);
-                                setDrillMes("");
-                                // opcional: já abre o modal de detalhamento do plano via pizza
-                              }}
+                              onClick={() => openStatusPlanoDetail(p)}
                               className="px-3 py-1.5 rounded-xl border border-white/10 bg-white/5 hover:bg-white/10 text-[12px] text-white/80"
                             >
-                              Abrir detalhado
+                              Abrir detalhe
                             </button>
                           </td>
                         </tr>
