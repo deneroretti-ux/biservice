@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useMemo, useState } from "react";
+import React, { useCallback, useMemo, useState, useRef } from "react";
 import * as XLSX from "xlsx";
 import {
   ResponsiveContainer,
@@ -710,6 +710,9 @@ export default function Page() {
   const [fConsultor, setFConsultor] = useState("todos");
   const [metricTab, setMetricTab] = useState("score");
   const [rankingType, setRankingType] = useState("consultor");
+  const [isDragging, setIsDragging] = useState(false);
+  const fileInputRef = useRef(null);
+  const dragCounterRef = useRef(0);
 
   const handleFiles = useCallback(async (fileList) => {
     const files = Array.from(fileList || []);
@@ -737,6 +740,45 @@ export default function Page() {
     setParsed(next);
     setFilesLoaded(files.map((f) => f.name));
   }, []);
+
+
+  const handleDragEnter = useCallback((e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounterRef.current += 1;
+    setIsDragging(true);
+  }, []);
+
+  const handleDragOver = useCallback((e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.dataTransfer) {
+      e.dataTransfer.dropEffect = "copy";
+    }
+  }, []);
+
+  const handleDragLeave = useCallback((e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounterRef.current -= 1;
+    if (dragCounterRef.current <= 0) {
+      dragCounterRef.current = 0;
+      setIsDragging(false);
+    }
+  }, []);
+
+  const handleDrop = useCallback((e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounterRef.current = 0;
+    setIsDragging(false);
+    const files = Array.from(e.dataTransfer?.files || []);
+    if (files.length) {
+      handleFiles(files);
+    }
+  }, [handleFiles]);
+
+
 
   const aggregated = useMemo(() => aggregateData(parsed), [parsed]);
 
@@ -925,13 +967,41 @@ export default function Page() {
                 </button>
               </div>
             </div>
-            <label style={{ display: "block", cursor: "pointer" }}>
-              <div style={{ border: `2px dashed ${COLORS.border}`, background: COLORS.panelAlt, borderRadius: 14, minHeight: 66, padding: "10px 12px", textAlign: "center", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}>
-                <Upload size={18} color={COLORS.orange} />
-                <div style={{ fontSize: 14, fontWeight: 800, color: COLORS.text, marginTop: 4 }}>Selecionar arquivos .xlsx</div>
+            <div
+              onDragEnter={handleDragEnter}
+              onDragOver={handleDragOver}
+              onDragLeave={handleDragLeave}
+              onDrop={handleDrop}
+              onClick={() => fileInputRef.current?.click()}
+              style={{
+                border: `2px dashed ${isDragging ? COLORS.blue : COLORS.border}`,
+                background: isDragging ? "#eef4ff" : COLORS.panelAlt,
+                borderRadius: 14,
+                minHeight: 66,
+                padding: "10px 12px",
+                textAlign: "center",
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                justifyContent: "center",
+                cursor: "pointer",
+                transition: "all 0.15s ease",
+                userSelect: "none",
+              }}
+            >
+              <Upload size={18} color={isDragging ? COLORS.blue : COLORS.orange} />
+              <div style={{ fontSize: 14, fontWeight: 800, color: COLORS.text, marginTop: 4, pointerEvents: "none" }}>
+                {isDragging ? "Solte os arquivos aqui" : "Selecionar ou arrastar arquivos .xlsx"}
               </div>
-              <input type="file" multiple accept=".xlsx" style={{ display: "none" }} onChange={(e) => handleFiles(e.target.files)} />
-            </label>
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                accept=".xlsx"
+                style={{ display: "none" }}
+                onChange={(e) => handleFiles(e.target.files)}
+              />
+            </div>
             {!!filesLoaded.length && (
               <div style={{ marginTop: 8, display: "flex", gap: 8, flexWrap: "wrap" }}>
                 <span style={{ background: COLORS.orangeSoft, color: COLORS.text, border: `1px solid #f4d28a`, padding: "6px 10px", borderRadius: 999, fontSize: 12, fontWeight: 700 }}>
@@ -961,7 +1031,12 @@ export default function Page() {
           </Card>
           <Card style={{ padding: 16, background: current ? COLORS.panel : COLORS.panelAlt }}>
             <div style={{ fontSize: 13, fontWeight: 700, color: COLORS.subtext }}>Status do destaque</div>
-            <div style={{ fontSize: 28, fontWeight: 900, color: current ? scoreColor(current.score) : COLORS.subtext, marginTop: 10 }}>{current ? scoreLabel(current.score) : "Sem dados"}</div>
+            <div style={{ fontSize: 28, fontWeight: 900, color: current ? scoreColor(current.score) : COLORS.subtext, marginTop: 10 }}>
+              {current ? scoreLabel(current.score) : "Sem dados"}
+            </div>
+            <div style={{ fontSize: 13, color: COLORS.subtext, marginTop: 8, fontWeight: 700 }}>
+              {current ? current.consultor : ""}
+            </div>
           </Card>
         </div>
 
