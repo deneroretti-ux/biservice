@@ -15,6 +15,8 @@ import {
 } from "recharts";
 import {
   Upload,
+  Download,
+  FileSpreadsheet,
   TrendingUp,
   Target,
   Users,
@@ -48,6 +50,7 @@ const KNOWN_FILES = {
   fidelidadeResgate: "programafidelidade_distribuicao_%_boletos_com_resgate",
   treinamento: "treinamentoforcadevenda_visao_geral_treinamento_pessoa",
   servicos: "servicosloja_servicos_realizados",
+  metas: "modelo-metas",
 };
 
 function normalizeName(value) {
@@ -307,6 +310,70 @@ function parseServicos(workbook, fileName) {
     }));
 }
 
+
+function parseMetas(workbook) {
+  const sheetName = workbook.SheetNames[0];
+  const sheet = workbook.Sheets[sheetName];
+  if (!sheet) return [];
+  const rows = XLSX.utils.sheet_to_json(sheet, { defval: "" });
+
+  return rows
+    .filter((row) => row["Consultor"] || row["PDV"])
+    .map((row) => ({
+      pdv: String(row["PDV"] ?? "").trim(),
+      consultorKey: normalizeName(row["Consultor"]),
+      consultor: String(row["Consultor"] ?? "").trim(),
+      metaReceita: toNumber(row["Meta Receita"]),
+      metaTicketMedio: toNumber(row["Meta Ticket Medio"]),
+      metaItensPorBoleto: toNumber(row["Meta Itens/Boleto"]),
+      metaConversao: toNumber(row["Meta Conversao"]),
+      metaB1: toNumber(row["Meta B1"]),
+      metaFidelidadePenetracao: toNumber(row["Meta Fidelidade Penetracao"]),
+      metaFidelidadeResgate: toNumber(row["Meta Fidelidade Resgate"]),
+      metaTreinamento: toNumber(row["Meta Treinamento"]),
+    }));
+}
+
+function exportarModeloMetas(rows) {
+  const headers = [
+    "PDV",
+    "Consultor",
+    "Meta Receita",
+    "Meta Ticket Medio",
+    "Meta Itens/Boleto",
+    "Meta Conversao",
+    "Meta B1",
+    "Meta Fidelidade Penetracao",
+    "Meta Fidelidade Resgate",
+    "Meta Treinamento",
+  ];
+
+  const data = [
+    headers,
+    ...rows.map((row) => [
+      row.pdv || "",
+      row.consultor || "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+    ]),
+  ];
+
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet(data);
+  ws["!cols"] = [
+    { wch: 12 }, { wch: 32 }, { wch: 14 }, { wch: 18 }, { wch: 18 },
+    { wch: 16 }, { wch: 12 }, { wch: 28 }, { wch: 24 }, { wch: 18 },
+  ];
+  XLSX.utils.book_append_sheet(wb, ws, "Metas");
+  XLSX.writeFile(wb, "modelo-metas-gerado.xlsx");
+}
+
 function parseWorkbook(fileName, workbook) {
   const normalized = normalizeFileName(fileName);
   if (normalized.includes(KNOWN_FILES.lojaIndicadores)) return { type: "lojaIndicadores", rows: parseLojaIndicadores(workbook, fileName) };
@@ -317,6 +384,7 @@ function parseWorkbook(fileName, workbook) {
   if (normalized.includes(KNOWN_FILES.fidelidadeResgate)) return { type: "fidelidadeResgate", rows: parseFidelidadeResgate(workbook, fileName) };
   if (normalized.includes(KNOWN_FILES.treinamento)) return { type: "treinamento", rows: parseTreinamento(workbook, fileName) };
   if (normalized.includes(KNOWN_FILES.servicos)) return { type: "servicos", rows: parseServicos(workbook, fileName) };
+  if (normalized.includes(KNOWN_FILES.metas) || normalized.includes("metas")) return { type: "metas", rows: parseMetas(workbook) };
   return { type: "desconhecido", rows: [] };
 }
 
@@ -346,6 +414,16 @@ function aggregateData(parsed) {
         precoMedio: 0,
         itensPorBoleto: 0,
         servicos: 0,
+        metas: {
+          receita: 0,
+          ticketMedio: 0,
+          itensPorBoleto: 0,
+          conversao: 0,
+          b1: 0,
+          fidelidadePenetracao: 0,
+          fidelidadeResgate: 0,
+          treinamento: 0,
+        },
       });
     }
     return map.get(key);
@@ -358,10 +436,13 @@ function aggregateData(parsed) {
       const target = ensure(key, row.consultor, row.pdv || "");
       if (!target.pdv && row.pdv) target.pdv = row.pdv;
 
-      if (!timelineMap.has(key)) timelineMap.set(key, new Map());
-      const monthMap = timelineMap.get(key);
-      if (!monthMap.has(row.monthKey)) monthMap.set(row.monthKey, { monthKey: row.monthKey, receita: 0 });
-      const monthItem = monthMap.get(row.monthKey);
+      let monthItem = null;
+      if (row.monthKey) {
+        if (!timelineMap.has(key)) timelineMap.set(key, new Map());
+        const monthMap = timelineMap.get(key);
+        if (!monthMap.has(row.monthKey)) monthMap.set(row.monthKey, { monthKey: row.monthKey, receita: 0 });
+        monthItem = monthMap.get(row.monthKey);
+      }
 
       if (type === "lojaIndicadores") {
         target.receita += row.receita || 0;
@@ -371,7 +452,7 @@ function aggregateData(parsed) {
         target.ticketMedio = row.boletoMedio || target.ticketMedio;
         target.precoMedio = row.precoMedio || target.precoMedio;
         target.itensPorBoleto = row.itensPorBoleto || target.itensPorBoleto;
-        monthItem.receita += row.receita || 0;
+        if (monthItem) monthItem.receita += row.receita || 0;
       }
       if (type === "acaoFluxo") {
         target.resgates += row.resgates || 0;
@@ -389,22 +470,45 @@ function aggregateData(parsed) {
       if (type === "fidelidadeResgate") target.fidelidadeResgatePct = row.fidelidadeResgatePct ?? target.fidelidadeResgatePct;
       if (type === "treinamento") target.treinamento = row.treinamento ?? target.treinamento;
       if (type === "servicos") target.servicos += row.quantidadeServicos || 0;
+      if (type === "metas") {
+        target.metas = {
+          receita: row.metaReceita || 0,
+          ticketMedio: row.metaTicketMedio || 0,
+          itensPorBoleto: row.metaItensPorBoleto || 0,
+          conversao: row.metaConversao || 0,
+          b1: row.metaB1 || 0,
+          fidelidadePenetracao: row.metaFidelidadePenetracao || 0,
+          fidelidadeResgate: row.metaFidelidadeResgate || 0,
+          treinamento: row.metaTreinamento || 0,
+        };
+      }
     });
   });
 
   const ranked = Array.from(map.values()).map((item) => {
     const b1Pct = item.boletos > 0 ? item.boletosB1 / item.boletos : 0;
     const conversao = item.resgates > 0 ? item.conversoes / item.resgates : 0;
+    const metas = item.metas || {};
+
+    const scoreReceita = metas.receita > 0 ? Math.min(item.receita / metas.receita, 1.3) : (item.receita > 0 ? 1 : 0);
+    const scoreTicket = metas.ticketMedio > 0 ? Math.min(item.ticketMedio / metas.ticketMedio, 1.3) : (item.ticketMedio ? Math.min(item.ticketMedio / 140, 1.3) : 0);
+    const scoreItens = metas.itensPorBoleto > 0 ? Math.min(item.itensPorBoleto / metas.itensPorBoleto, 1.3) : (item.itensPorBoleto ? Math.min(item.itensPorBoleto / 2.2, 1.3) : 0);
+    const scoreConversao = metas.conversao > 0 ? Math.min(conversao / metas.conversao, 1.3) : (conversao ? Math.min(conversao / 0.19, 1.3) : 0);
+    const scoreB1 = metas.b1 > 0 ? Math.min(b1Pct / metas.b1, 1.3) : (b1Pct ? Math.min(b1Pct / 0.30, 1.3) : 0);
+    const scoreFidelidadePenetracao = metas.fidelidadePenetracao > 0 ? Math.min((item.fidelidadePenetracao || 0) / metas.fidelidadePenetracao, 1.3) : (item.fidelidadePenetracao ? Math.min(item.fidelidadePenetracao / 0.16, 1.3) : 0);
+    const scoreFidelidadeResgate = metas.fidelidadeResgate > 0 ? Math.min((item.fidelidadeResgatePct || 0) / metas.fidelidadeResgate, 1.3) : (item.fidelidadeResgatePct ? Math.min(item.fidelidadeResgatePct / 0.10, 1.3) : 0);
+    const scoreTreinamento = metas.treinamento > 0 ? Math.min((item.treinamento || 0) / metas.treinamento, 1.3) : (item.treinamento || 0);
 
     const parts = [
-      item.receita > 0 ? 1 : 0,
-      item.ticketMedio ? Math.min(item.ticketMedio / 140, 1.3) : 0,
-      item.itensPorBoleto ? Math.min(item.itensPorBoleto / 2.2, 1.3) : 0,
-      item.treinamento || 0,
-      item.fidelidadePenetracao ? Math.min(item.fidelidadePenetracao / 0.16, 1.3) : 0,
+      scoreReceita,
+      scoreTicket,
+      scoreItens,
+      scoreConversao,
+      scoreB1,
+      scoreFidelidadePenetracao,
+      scoreFidelidadeResgate,
+      scoreTreinamento,
       item.cpfPercent ? Math.min(item.cpfPercent / 1, 1.3) : 0,
-      conversao ? Math.min(conversao / 0.19, 1.3) : 0,
-      b1Pct ? Math.min(b1Pct / 0.30, 1.3) : 0,
     ];
 
     const score = parts.reduce((a, b) => a + b, 0) / parts.length;
@@ -479,6 +583,116 @@ function SelectField({ label, value, onChange, options }) {
   );
 }
 
+
+function exportarRelatorioConsultores(rows) {
+  const headers = [
+    "PDV",
+    "Consultor",
+    "Receita",
+    "Meta Receita",
+    "Ating. Receita",
+    "Boletos",
+    "B1",
+    "Meta B1",
+    "Ating. B1",
+    "Boleto Medio",
+    "Meta Boleto Medio",
+    "Ating. Boleto Medio",
+    "Itens/Boleto",
+    "Meta Itens/Boleto",
+    "Ating. Itens/Boleto",
+    "Conversao",
+    "Meta Conversao",
+    "Ating. Conversao",
+    "Fidelidade Penetracao",
+    "Meta Fidelidade Penetracao",
+    "Ating. Fidelidade Penetracao",
+    "Fidelidade Resgate",
+    "Meta Fidelidade Resgate",
+    "Ating. Fidelidade Resgate",
+    "Treinamento",
+    "Meta Treinamento",
+    "Ating. Treinamento",
+    "Score",
+    "Status"
+  ];
+
+  const pct = (value, meta) => (meta > 0 ? value / meta : null);
+
+  const getStatus = (score) => {
+    if (score >= 1) return "🟢 Acima da meta";
+    if (score >= 0.9) return "🟡 Em atenção";
+    return "🔴 Abaixo da meta";
+  };
+
+  const data = rows.map((item) => [
+    item.pdv || "",
+    item.consultor || "",
+    item.receita || 0,
+    item.metas?.receita || 0,
+    pct(item.receita || 0, item.metas?.receita || 0),
+    item.boletos || 0,
+    item.b1Pct || 0,
+    item.metas?.b1 || 0,
+    pct(item.b1Pct || 0, item.metas?.b1 || 0),
+    item.ticketMedio || 0,
+    item.metas?.ticketMedio || 0,
+    pct(item.ticketMedio || 0, item.metas?.ticketMedio || 0),
+    item.itensPorBoleto || 0,
+    item.metas?.itensPorBoleto || 0,
+    pct(item.itensPorBoleto || 0, item.metas?.itensPorBoleto || 0),
+    item.conversao || 0,
+    item.metas?.conversao || 0,
+    pct(item.conversao || 0, item.metas?.conversao || 0),
+    item.fidelidadePenetracao || 0,
+    item.metas?.fidelidadePenetracao || 0,
+    pct(item.fidelidadePenetracao || 0, item.metas?.fidelidadePenetracao || 0),
+    item.fidelidadeResgatePct || 0,
+    item.metas?.fidelidadeResgate || 0,
+    pct(item.fidelidadeResgatePct || 0, item.metas?.fidelidadeResgate || 0),
+    item.treinamento || 0,
+    item.metas?.treinamento || 0,
+    pct(item.treinamento || 0, item.metas?.treinamento || 0),
+    item.score || 0,
+    getStatus(item.score || 0),
+  ]);
+
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet([headers, ...data]);
+
+  ws["!cols"] = [
+    { wch: 12 }, { wch: 32 }, { wch: 14 }, { wch: 14 }, { wch: 12 },
+    { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 12 }, { wch: 14 },
+    { wch: 18 }, { wch: 16 }, { wch: 14 }, { wch: 18 }, { wch: 16 },
+    { wch: 12 }, { wch: 14 }, { wch: 14 }, { wch: 20 }, { wch: 24 },
+    { wch: 22 }, { wch: 18 }, { wch: 22 }, { wch: 20 }, { wch: 14 },
+    { wch: 16 }, { wch: 16 }, { wch: 12 }, { wch: 18 },
+  ];
+
+  const percentCols = [5, 8, 11, 14, 17, 20, 23, 26, 27];  // 1-based columns for attainment/score-like fields except score
+  for (let rowIdx = 2; rowIdx <= data.length + 1; rowIdx++) {
+    for (const col of percentCols) {
+      const cellRef = XLSX.utils.encode_cell({ r: rowIdx - 1, c: col - 1 });
+      if (ws[cellRef] && typeof ws[cellRef].v === "number") {
+        ws[cellRef].z = "0.0%";
+      }
+    }
+    const scoreRef = XLSX.utils.encode_cell({ r: rowIdx - 1, c: 27 });
+      }
+
+  // format score column as percentage
+  for (let rowIdx = 2; rowIdx <= data.length + 1; rowIdx++) {
+    const scoreRef = XLSX.utils.encode_cell({ r: rowIdx - 1, c: 27 });
+    if (ws[scoreRef] && typeof ws[scoreRef].v === "number") {
+      ws[scoreRef].z = "0.0%";
+    }
+  }
+
+  XLSX.utils.book_append_sheet(wb, ws, "Relatorio Consultores");
+  XLSX.writeFile(wb, "relatorio-consultores.xlsx");
+}
+
+
 export default function Page() {
   const [parsed, setParsed] = useState({
     lojaIndicadores: [],
@@ -489,11 +703,13 @@ export default function Page() {
     fidelidadeResgate: [],
     treinamento: [],
     servicos: [],
+    metas: [],
   });
   const [filesLoaded, setFilesLoaded] = useState([]);
   const [fPdv, setFPdv] = useState("todos");
   const [fConsultor, setFConsultor] = useState("todos");
   const [metricTab, setMetricTab] = useState("score");
+  const [rankingType, setRankingType] = useState("consultor");
 
   const handleFiles = useCallback(async (fileList) => {
     const files = Array.from(fileList || []);
@@ -506,6 +722,7 @@ export default function Page() {
       fidelidadeResgate: [],
       treinamento: [],
       servicos: [],
+      metas: [],
     };
 
     for (const file of files) {
@@ -566,19 +783,78 @@ export default function Page() {
     if (!current) return [];
     return aggregated.monthSeries
       .filter((item) => item.consultorKey === current.consultorKey)
-      .sort((a, b) => a.monthKey.localeCompare(b.monthKey));
+      .sort((a, b) => String(a.monthKey || "").localeCompare(String(b.monthKey || "")));
   }, [aggregated, current]);
 
-  const rankingData = useMemo(() => {
-    return filtered.slice(0, 10).map((item) => ({
-      nome: item.consultor.split(" ").slice(0, 2).join(" "),
-      valor:
-        metricTab === "score" ? item.score * 100 :
-        metricTab === "receita" ? item.receita :
-        metricTab === "conversao" ? item.conversao * 100 :
-        item.b1Pct * 100,
-    }));
+  
+  const rankingPdvData = useMemo(() => {
+    const map = new Map();
+    filtered.forEach((item) => {
+      if (!item.pdv) return;
+      if (!map.has(item.pdv)) {
+        map.set(item.pdv, {
+          pdv: item.pdv,
+          receita: 0,
+          score: 0,
+          conversao: 0,
+          b1: 0,
+          count: 0,
+        });
+      }
+      const acc = map.get(item.pdv);
+      acc.receita += item.receita;
+      acc.score += item.score;
+      acc.conversao += item.conversao;
+      acc.b1 += item.b1Pct;
+      acc.count += 1;
+    });
+
+    return Array.from(map.values())
+      .map((i) => ({
+        nome: i.pdv,
+        valor:
+          metricTab === "score" ? (i.score / i.count) * 100 :
+          metricTab === "receita" ? i.receita :
+          metricTab === "conversao" ? (i.conversao / i.count) * 100 :
+          (i.b1 / i.count) * 100,
+      }))
+      .sort((a, b) => b.valor - a.valor)
+      .slice(0, 10);
   }, [filtered, metricTab]);
+
+  const rankingData = useMemo(() => {
+    return filtered
+      .map((item) => ({
+        nome: item.consultor.split(" ").slice(0, 2).join(" "),
+        valor:
+          metricTab === "score" ? item.score * 100 :
+          metricTab === "receita" ? item.receita :
+          metricTab === "conversao" ? item.conversao * 100 :
+          item.b1Pct * 100,
+      }))
+      .sort((a, b) => b.valor - a.valor)
+      .slice(0, 10);
+  }, [filtered, metricTab]);
+
+  const baseMetas = useMemo(() => {
+    return aggregated.ranked
+      .map((item) => ({
+        pdv: item.pdv || "",
+        consultor: item.consultor || "",
+      }))
+      .filter((item) => item.consultor)
+      .sort((a, b) => {
+        const pdvCmp = String(a.pdv).localeCompare(String(b.pdv));
+        if (pdvCmp !== 0) return pdvCmp;
+        return String(a.consultor).localeCompare(String(b.consultor));
+      });
+  }, [aggregated]);
+
+
+  const relatorioRows = useMemo(() => {
+    return [...filtered].sort((a, b) => b.score - a.score);
+  }, [filtered]);
+
 
   const noData = !aggregated.ranked.length;
 
@@ -592,31 +868,81 @@ export default function Page() {
         </div>
       </div>
 
-      <div style={{ maxWidth: 1440, margin: "0 auto", padding: 20 }}>
-        <div style={{ display: "grid", gridTemplateColumns: "1.25fr 1fr", gap: 16, marginBottom: 16 }}>
-          <Card style={{ padding: 18, background: `linear-gradient(135deg, ${COLORS.panel} 0%, ${COLORS.orangeSoft} 100%)` }}>
-            <div style={{ fontSize: 13, fontWeight: 700, color: COLORS.subtext }}>Visão do consultor</div>
-            <div style={{ fontSize: 26, fontWeight: 900, color: COLORS.text, marginTop: 8 }}>Performance consolidada</div>
-            <div style={{ fontSize: 14, color: COLORS.subtext, marginTop: 6 }}>
-              Receita, B1, conversão, fidelidade, treinamento e comparativo com a média do filtro.
-            </div>
+      <div style={{ maxWidth: 1440, margin: "0 auto", padding: 16 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1.15fr 0.85fr", gap: 12, marginBottom: 12, alignItems: "stretch" }}>
+          <Card style={{ padding: 10, background: `linear-gradient(135deg, ${COLORS.panel} 0%, ${COLORS.orangeSoft} 100%)`, minHeight: 92, display: "flex", flexDirection: "column", justifyContent: "center" }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: COLORS.subtext }}>Visão do consultor</div>
+            <div style={{ fontSize: 18, fontWeight: 900, color: COLORS.text, marginTop: 4, lineHeight: 1.1 }}>Performance consolidada</div>
           </Card>
 
-          <Card style={{ padding: 18 }}>
-            <div style={{ fontSize: 13, fontWeight: 700, color: COLORS.subtext, marginBottom: 12 }}>Importar planilhas</div>
+          <Card style={{ padding: 10, minHeight: 92, display: "flex", flexDirection: "column", justifyContent: "center" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 8 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: COLORS.subtext }}>Importar planilhas</div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                <button
+                  onClick={() => exportarModeloMetas(baseMetas)}
+                  disabled={!baseMetas.length}
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 6,
+                    border: `1px solid ${baseMetas.length ? COLORS.blue : COLORS.border}`,
+                    background: baseMetas.length ? COLORS.blue : COLORS.panelAlt,
+                    color: baseMetas.length ? "#fff" : COLORS.subtext,
+                    borderRadius: 999,
+                    padding: "6px 10px",
+                    fontSize: 12,
+                    fontWeight: 800,
+                    cursor: baseMetas.length ? "pointer" : "not-allowed",
+                    opacity: baseMetas.length ? 1 : 0.7,
+                  }}
+                  title="Gerar base de metas com todos os PDVs e consultores carregados"
+                >
+                  <Download size={14} />
+                  Gerar base de metas
+                </button>
+                <button
+                  onClick={() => exportarRelatorioConsultores(relatorioRows)}
+                  disabled={!relatorioRows.length}
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 6,
+                    border: `1px solid ${relatorioRows.length ? COLORS.green : COLORS.border}`,
+                    background: relatorioRows.length ? COLORS.green : COLORS.panelAlt,
+                    color: relatorioRows.length ? "#fff" : COLORS.subtext,
+                    borderRadius: 999,
+                    padding: "6px 10px",
+                    fontSize: 12,
+                    fontWeight: 800,
+                    cursor: relatorioRows.length ? "pointer" : "not-allowed",
+                    opacity: relatorioRows.length ? 1 : 0.7,
+                  }}
+                  title="Exportar relatório de consultores com resultados e status"
+                >
+                  <FileSpreadsheet size={14} />
+                  Exportar relatório
+                </button>
+              </div>
+            </div>
             <label style={{ display: "block", cursor: "pointer" }}>
-              <div style={{ border: `2px dashed ${COLORS.border}`, background: COLORS.panelAlt, borderRadius: 16, padding: 18, textAlign: "center" }}>
-                <Upload size={22} color={COLORS.orange} />
-                <div style={{ fontSize: 15, fontWeight: 800, color: COLORS.text, marginTop: 8 }}>Selecione os arquivos .xlsx</div>
-                <div style={{ fontSize: 13, color: COLORS.subtext, marginTop: 4 }}>A página reconhece automaticamente os arquivos compatíveis.</div>
+              <div style={{ border: `2px dashed ${COLORS.border}`, background: COLORS.panelAlt, borderRadius: 14, minHeight: 66, padding: "10px 12px", textAlign: "center", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}>
+                <Upload size={18} color={COLORS.orange} />
+                <div style={{ fontSize: 14, fontWeight: 800, color: COLORS.text, marginTop: 4 }}>Selecionar arquivos .xlsx</div>
               </div>
               <input type="file" multiple accept=".xlsx" style={{ display: "none" }} onChange={(e) => handleFiles(e.target.files)} />
             </label>
             {!!filesLoaded.length && (
-              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
-                {filesLoaded.map((name) => (
-                  <span key={name} style={{ background: COLORS.orangeSoft, color: COLORS.text, border: `1px solid #f4d28a`, padding: "6px 10px", borderRadius: 999, fontSize: 12, fontWeight: 700 }}>{name}</span>
-                ))}
+              <div style={{ marginTop: 8, display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <span style={{ background: COLORS.orangeSoft, color: COLORS.text, border: `1px solid #f4d28a`, padding: "6px 10px", borderRadius: 999, fontSize: 12, fontWeight: 700 }}>
+                  📁 {filesLoaded.length} {filesLoaded.length === 1 ? "arquivo carregado" : "arquivos carregados"}
+                </span>
+                <span style={{ background: COLORS.panelAlt, color: COLORS.text, border: `1px solid ${COLORS.border}`, padding: "6px 10px", borderRadius: 999, fontSize: 12, fontWeight: 700 }}>
+                  🧾 {baseMetas.length} {baseMetas.length === 1 ? "linha para meta" : "linhas para metas"}
+                </span>
+                <span style={{ background: "#eefbf3", color: COLORS.text, border: `1px solid #b7e4c7`, padding: "6px 10px", borderRadius: 999, fontSize: 12, fontWeight: 700 }}>
+                  📊 {relatorioRows.length} {relatorioRows.length === 1 ? "linha no relatório" : "linhas no relatório"}
+                </span>
               </div>
             )}
           </Card>
@@ -641,40 +967,96 @@ export default function Page() {
 
         {!noData && current ? (
           <>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(6, minmax(0, 1fr))", gap: 16, marginBottom: 16 }}>
-              <MetricCard title="Receita" value={formatCurrency(current.receita)} subtitle={`PDV ${current.pdv || "-"}`} percent={current.scorePct} gaugeColor={COLORS.orange} icon={TrendingUp} />
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(7, minmax(0, 1fr))", gap: 16, marginBottom: 16 }}>
+              <MetricCard title="Receita" value={formatCurrency(current.receita)} subtitle={current.metas?.receita ? `Meta: ${formatCurrency(current.metas.receita)}` : `PDV ${current.pdv || "-"}`} percent={current.metas?.receita ? Math.min((current.receita / current.metas.receita) * 100, 100) : current.scorePct} gaugeColor={COLORS.orange} icon={TrendingUp} />
               <MetricCard title="Boletos" value={formatNumber(current.boletos)} subtitle={`B1: ${formatPercent(current.b1Pct)}`} percent={current.b1Pct * 100} gaugeColor={COLORS.green} icon={Target} />
-              <MetricCard title="Boleto Médio" value={formatCurrency(current.ticketMedio)} subtitle={`Preço médio: ${formatCurrency(current.precoMedio)}`} percent={(current.ticketMedio / 140) * 100} gaugeColor={COLORS.green} icon={Store} />
-              <MetricCard title="Itens/Boleto" value={formatNumber(current.itensPorBoleto, 2)} subtitle={`Itens: ${formatNumber(current.itens)}`} percent={(current.itensPorBoleto / 2.2) * 100} gaugeColor={COLORS.orange} icon={Users} />
-              <MetricCard title="Fidelidade" value={formatPercent(current.fidelidadePenetracao || 0)} subtitle={`Resgate: ${formatPercent(current.fidelidadeResgatePct || 0)}`} percent={(current.fidelidadePenetracao || 0) * 500} gaugeColor={COLORS.green} icon={Award} />
-              <MetricCard title="Treinamento" value={formatPercent(current.treinamento || 0)} subtitle={`CPF válido IAF: ${formatPercent(current.boletosValidosIaf || 0)}`} percent={(current.treinamento || 0) * 100} gaugeColor={COLORS.orange} icon={AlertTriangle} />
+              <MetricCard title="Boleto Médio" value={formatCurrency(current.ticketMedio)} subtitle={current.metas?.ticketMedio ? `Meta: ${formatCurrency(current.metas.ticketMedio)}` : `Preço médio: ${formatCurrency(current.precoMedio)}`} percent={current.metas?.ticketMedio ? Math.min((current.ticketMedio / current.metas.ticketMedio) * 100, 100) : (current.ticketMedio / 140) * 100} gaugeColor={COLORS.green} icon={Store} />
+              <MetricCard title="Itens/Boleto" value={formatNumber(current.itensPorBoleto, 2)} subtitle={current.metas?.itensPorBoleto ? `Meta: ${formatNumber(current.metas.itensPorBoleto, 2)}` : `Itens: ${formatNumber(current.itens)}`} percent={current.metas?.itensPorBoleto ? Math.min((current.itensPorBoleto / current.metas.itensPorBoleto) * 100, 100) : (current.itensPorBoleto / 2.2) * 100} gaugeColor={COLORS.orange} icon={Users} />
+              
+<MetricCard
+  title="Fidelidade - Penetração"
+  value={formatPercent(current.fidelidadePenetracao || 0)}
+  subtitle={current.metas?.fidelidadePenetracao ? `Meta: ${formatPercent(current.metas.fidelidadePenetracao)}` : "Desafio fidelidade"}
+  percent={current.metas?.fidelidadePenetracao ? Math.min(((current.fidelidadePenetracao || 0) / current.metas.fidelidadePenetracao) * 100, 100) : (current.fidelidadePenetracao || 0) * 500}
+  gaugeColor={COLORS.green}
+  icon={Award}
+/>
+
+<MetricCard
+  title="Fidelidade - Resgate"
+  value={formatPercent(current.fidelidadeResgatePct || 0)}
+  subtitle={current.metas?.fidelidadeResgate ? `Meta: ${formatPercent(current.metas.fidelidadeResgate)}` : "Uso de benefícios"}
+  percent={current.metas?.fidelidadeResgate ? Math.min(((current.fidelidadeResgatePct || 0) / current.metas.fidelidadeResgate) * 100, 100) : (current.fidelidadeResgatePct || 0) * 500}
+  gaugeColor={COLORS.orange}
+  icon={Award}
+/>
+
+              <MetricCard title="Treinamento" value={formatPercent(current.treinamento || 0)} subtitle={current.metas?.treinamento ? `Meta: ${formatPercent(current.metas.treinamento)}` : `CPF válido IAF: ${formatPercent(current.boletosValidosIaf || 0)}`} percent={current.metas?.treinamento ? Math.min(((current.treinamento || 0) / current.metas.treinamento) * 100, 100) : (current.treinamento || 0) * 100} gaugeColor={COLORS.orange} icon={AlertTriangle} />
             </div>
 
             <div style={{ display: "grid", gridTemplateColumns: "1.3fr 0.9fr", gap: 16, marginBottom: 16 }}>
               <Card style={{ padding: 18 }}>
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, gap: 10, flexWrap: "wrap" }}>
                   <div>
-                    <div style={{ fontSize: 22, fontWeight: 900 }}>{current.consultor}</div>
-                    <div style={{ fontSize: 13, color: COLORS.subtext }}>Evolução do consultor no período carregado</div>
+                    <div style={{ fontSize: 20, fontWeight: 900 }}>Ranking de consultores</div>
+                    <div style={{ fontSize: 13, color: COLORS.subtext }}>Top 10 dentro do filtro atual</div>
                   </div>
-                  <div style={{ background: COLORS.navy, color: "#fff", padding: "8px 12px", borderRadius: 999, fontWeight: 800, fontSize: 13 }}>Score {formatPercent(current.score, 0)}</div>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "nowrap", width: "100%" }}>
+                    <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
+                      <button onClick={() => setRankingType("consultor")} style={{
+                        border: `1px solid ${rankingType === "consultor" ? COLORS.blue : COLORS.border}`,
+                        background: rankingType === "consultor" ? COLORS.blue : COLORS.panelAlt,
+                        color: rankingType === "consultor" ? "#fff" : COLORS.text,
+                        borderRadius: 999,
+                        padding: "8px 14px",
+                        fontWeight: 800,
+                        cursor: "pointer"
+                      }}>Consultores</button>
+                      <button onClick={() => setRankingType("pdv")} style={{
+                        border: `1px solid ${rankingType === "pdv" ? COLORS.blue : COLORS.border}`,
+                        background: rankingType === "pdv" ? COLORS.blue : COLORS.panelAlt,
+                        color: rankingType === "pdv" ? "#fff" : COLORS.text,
+                        borderRadius: 999,
+                        padding: "8px 14px",
+                        fontWeight: 800,
+                        cursor: "pointer"
+                      }}>PDVs</button>
+                    </div>
+                    <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", flexWrap: "nowrap", flexShrink: 0 }}>
+                    {[
+                      ["score", "Score"],
+                      ["receita", "Receita"],
+                      ["conversao", "Conversão"],
+                      ["b1", "B1"],
+                    ].map(([key, label]) => (
+                      <button
+                        key={key}
+                        onClick={() => setMetricTab(key)}
+                        style={{
+                          border: `1px solid ${metricTab === key ? COLORS.orange : COLORS.border}`,
+                          background: metricTab === key ? COLORS.orange : COLORS.panelAlt,
+                          color: metricTab === key ? "#fff" : COLORS.text,
+                          borderRadius: 999,
+                          padding: "8px 14px",
+                          fontWeight: 800,
+                          cursor: "pointer",
+                        }}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                    </div>
+                  </div>
                 </div>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 14, marginBottom: 16 }}>
-                  <div><div style={{ fontSize: 12, color: COLORS.subtext }}>Receita</div><div style={{ fontSize: 24, fontWeight: 900 }}>{formatCurrency(current.receita)}</div></div>
-                  <div><div style={{ fontSize: 12, color: COLORS.subtext }}>Conversão</div><div style={{ fontSize: 24, fontWeight: 900 }}>{formatPercent(current.conversao)}</div></div>
-                  <div><div style={{ fontSize: 12, color: COLORS.subtext }}>B1</div><div style={{ fontSize: 24, fontWeight: 900 }}>{formatPercent(current.b1Pct)}</div></div>
-                  <div><div style={{ fontSize: 12, color: COLORS.subtext }}>Serviços</div><div style={{ fontSize: 24, fontWeight: 900 }}>{formatNumber(current.servicos)}</div></div>
-                </div>
-                <div style={{ height: 320 }}>
+                <div style={{ height: 360 }}>
                   <ResponsiveContainer width="100%" height="100%">
-                    <LineChart data={monthlySeries.length ? monthlySeries : [{ monthKey: "Período", receita: current.receita, score: current.score * 100 }] }>
+                    <BarChart data={rankingType === "consultor" ? rankingData : rankingPdvData} layout="vertical" margin={{ left: 30, right: 10, top: 8, bottom: 8 }}>
                       <CartesianGrid strokeDasharray="3 3" />
-                      <XAxis dataKey="monthKey" />
-                      <YAxis />
-                      <Tooltip formatter={(value, name) => name === "receita" ? formatCurrency(Number(value)) : formatNumber(Number(value), 1)} />
-                      <Line type="monotone" dataKey="receita" stroke={COLORS.blue} strokeWidth={3} dot={false} />
-                      <Line type="monotone" dataKey="score" stroke={COLORS.orange} strokeWidth={3} dot={false} />
-                    </LineChart>
+                      <XAxis type="number" />
+                      <YAxis dataKey="nome" type="category" width={120} />
+                      <Tooltip formatter={(value) => metricTab === "receita" ? formatCurrency(Number(value)) : formatNumber(Number(value), 1)} />
+                      <Bar dataKey="valor" fill={COLORS.blue} radius={[0, 12, 12, 0]} />
+                    </BarChart>
                   </ResponsiveContainer>
                 </div>
               </Card>
@@ -700,73 +1082,6 @@ export default function Page() {
                     ))}
                   </div>
                 ) : <div style={{ color: COLORS.subtext }}>Sem base suficiente.</div>}
-              </Card>
-            </div>
-
-            <div style={{ display: "grid", gridTemplateColumns: "1.2fr 0.8fr", gap: 16 }}>
-              <Card style={{ padding: 18 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, gap: 10, flexWrap: "wrap" }}>
-                  <div>
-                    <div style={{ fontSize: 20, fontWeight: 900 }}>Ranking de consultores</div>
-                    <div style={{ fontSize: 13, color: COLORS.subtext }}>Top 10 dentro do filtro atual</div>
-                  </div>
-                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                    {[
-                      ["score", "Score"],
-                      ["receita", "Receita"],
-                      ["conversao", "Conversão"],
-                      ["b1", "B1"],
-                    ].map(([key, label]) => (
-                      <button
-                        key={key}
-                        onClick={() => setMetricTab(key)}
-                        style={{
-                          border: `1px solid ${metricTab === key ? COLORS.orange : COLORS.border}`,
-                          background: metricTab === key ? COLORS.orange : COLORS.panelAlt,
-                          color: metricTab === key ? "#fff" : COLORS.text,
-                          borderRadius: 999,
-                          padding: "8px 14px",
-                          fontWeight: 800,
-                          cursor: "pointer",
-                        }}
-                      >
-                        {label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                <div style={{ height: 360 }}>
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={rankingData} layout="vertical" margin={{ left: 30, right: 10, top: 8, bottom: 8 }}>
-                      <CartesianGrid strokeDasharray="3 3" />
-                      <XAxis type="number" />
-                      <YAxis dataKey="nome" type="category" width={120} />
-                      <Tooltip formatter={(value) => metricTab === "receita" ? formatCurrency(Number(value)) : formatNumber(Number(value), 1)} />
-                      <Bar dataKey="valor" fill={COLORS.blue} radius={[0, 12, 12, 0]} />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-              </Card>
-
-              <Card style={{ padding: 18 }}>
-                <div style={{ fontSize: 20, fontWeight: 900, marginBottom: 14 }}>Alertas e oportunidades</div>
-                <div style={{ background: COLORS.panelAlt, border: `1px solid ${COLORS.border}`, borderRadius: 14, padding: 14, marginBottom: 14 }}>
-                  <div style={{ fontSize: 14, fontWeight: 900, marginBottom: 8 }}>Diagnóstico automático</div>
-                  <div style={{ fontSize: 14, color: COLORS.subtext, lineHeight: 1.5 }}>
-                    <div>{current.conversao < 0.19 ? "Conversão abaixo da referência. Reforce abordagem de resgate e fechamento." : "Conversão saudável dentro da referência carregada."}</div>
-                    <div style={{ marginTop: 8 }}>{current.itensPorBoleto < 2 ? "Itens por boleto abaixo do ideal. Existe espaço para venda complementar." : "Itens por boleto em bom nível."}</div>
-                    <div style={{ marginTop: 8 }}>{(current.treinamento || 0) < 0.9 ? "Treinamento abaixo do desejado. Vale atuar nas trilhas de capacitação." : "Treinamento com boa adesão."}</div>
-                  </div>
-                </div>
-                <div style={{ fontSize: 14, fontWeight: 900, marginBottom: 10 }}>Menores scores do filtro</div>
-                <div style={{ display: "grid", gap: 10 }}>
-                  {filtered.slice(-5).reverse().map((item) => (
-                    <div key={item.consultorKey} style={{ border: `1px solid ${COLORS.border}`, borderRadius: 12, padding: 12, display: "flex", justifyContent: "space-between", gap: 10, background: COLORS.panelAlt }}>
-                      <div style={{ fontSize: 14, fontWeight: 700 }}>{item.consultor}</div>
-                      <div style={{ fontSize: 13, fontWeight: 900, color: scoreColor(item.score) }}>{formatPercent(item.score, 0)}</div>
-                    </div>
-                  ))}
-                </div>
               </Card>
             </div>
           </>
