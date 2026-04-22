@@ -6,12 +6,14 @@ import {
   ResponsiveContainer,
   BarChart,
   Bar,
+  Cell,
   XAxis,
   YAxis,
   CartesianGrid,
   Tooltip,
   LineChart,
   Line,
+  ReferenceLine,
 } from "recharts";
 import {
   Upload,
@@ -26,19 +28,19 @@ import {
 } from "lucide-react";
 
 const COLORS = {
-  bg: "#f3f5f7",
-  panel: "#ffffff",
-  panelAlt: "#f8fafc",
-  border: "#d7dee7",
-  text: "#0f172a",
-  subtext: "#5b6777",
-  navy: "#0b1733",
-  navy2: "#122347",
-  orange: "#f59e0b",
-  orangeSoft: "#fff3d9",
-  green: "#16a34a",
-  red: "#dc2626",
-  blue: "#7f9cc8",
+  bg: "#050b16",
+  panel: "#081224",
+  panelAlt: "#0d1830",
+  border: "rgba(255,255,255,0.12)",
+  text: "#f8fafc",
+  subtext: "#a8b3c7",
+  navy: "#030814",
+  navy2: "#0a1730",
+  orange: "#22c55e",
+  orangeSoft: "rgba(34,197,94,0.12)",
+  green: "#22c55e",
+  red: "#ef4444",
+  blue: "#60a5fa",
 };
 
 const KNOWN_FILES = {
@@ -46,6 +48,9 @@ const KNOWN_FILES = {
   acaoFluxo: "acaodefluxo_performance_por_pdv_e_consultor",
   idCliente: "indicadores_id_cliente",
   itensBoleto: "loja_distribuicao_de_itens_por_boleto",
+  boletoPromocional: "loja_boleto promocional",
+  boletoTurbinado: "loja_boleto turbinado",
+  penetracaoSkin: "loja_cuidados_faciais_iaf",
   fidelidadePenetracao: "programafidelidade_distribuicao_penetracao_boleto_fidelidade",
   fidelidadeResgate: "programafidelidade_distribuicao_%_boletos_com_resgate",
   treinamento: "treinamentoforcadevenda_visao_geral_treinamento_pessoa",
@@ -72,13 +77,23 @@ function normalizeFileName(name) {
 function toNumber(value) {
   if (value === null || value === undefined || value === "") return 0;
   if (typeof value === "number") return Number.isFinite(value) ? value : 0;
+
   const text = String(value).trim();
   if (!text) return 0;
-  if (text.includes("%")) {
-    const pct = Number(text.replace(/\./g, "").replace(",", ".").replace("%", ""));
+
+  const cleaned = text
+    .replace(/R\$/gi, "")
+    .replace(/\s+/g, "")
+    .replace(/[^\d,.%-]/g, "");
+
+  if (!cleaned) return 0;
+
+  if (cleaned.includes("%")) {
+    const pct = Number(cleaned.replace(/\./g, "").replace(",", ".").replace("%", ""));
     return Number.isFinite(pct) ? pct / 100 : 0;
   }
-  const parsed = Number(text.replace(/\./g, "").replace(",", "."));
+
+  const parsed = Number(cleaned.replace(/\./g, "").replace(",", "."));
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
@@ -99,7 +114,7 @@ function formatPercent(value, digits = 2) {
 
 function scoreColor(score) {
   if (score >= 1) return COLORS.green;
-  if (score >= 0.9) return COLORS.orange;
+  if (score >= 0.9) return "#f59e0b";
   return COLORS.red;
 }
 
@@ -108,6 +123,37 @@ function scoreLabel(score) {
   if (score >= 0.9) return "Em atenção";
   return "Abaixo da meta";
 }
+
+function performanceColor(ratio) {
+  if (ratio >= 1) return COLORS.green;
+  if (ratio >= 0.9) return COLORS.orange;
+  return COLORS.red;
+}
+
+function safeRatio(value, meta, fallback = 0) {
+  if (meta > 0) return value / meta;
+  return fallback;
+}
+
+function safeInverseRatio(value, meta, fallback = 0) {
+  if (meta > 0 && value > 0) return meta / value;
+  if (meta > 0 && value === 0) return 1.3;
+  return fallback;
+}
+
+function inverseGaugePercent(value, meta) {
+  if (!(meta > 0)) return 0;
+  if (value <= 0) return 100;
+  return Math.min((meta / value) * 100, 100);
+}
+
+function normalizeRatio(value) {
+  const num = Number(value || 0);
+  if (!Number.isFinite(num)) return 0;
+  if (num > 1 && num <= 100) return num / 100;
+  return num;
+}
+
 
 function sheetRows(sheet) {
   return XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null, raw: true });
@@ -212,8 +258,8 @@ function parseIdCliente(workbook, fileName) {
       consultor: String(row.CONSULTOR ?? ""),
       monthKey,
       atendimentosId: toNumber(row["ATENDIMENTOS NO ID CLIENTE"]),
-      cpfPercent: toNumber(row["% ATENDIMENTOS COM CPF (IAF 2026)"]),
-      boletosValidosIaf: toNumber(row["% BOLETOS ID CLIENTE VALIDOS (IAF)"] || row["% BOLETOS ID CLIENTE VÁLIDOS (IAF)"]),
+      cpfPercent: normalizeRatio(toNumber(row["% ATENDIMENTOS COM CPF (IAF 2026)"])),
+      boletosValidosIaf: normalizeRatio(toNumber(row["% BOLETOS ID CLIENTE VALIDOS (IAF)"] || row["% BOLETOS ID CLIENTE VÁLIDOS (IAF)"])),
     }));
 }
 
@@ -222,18 +268,64 @@ function parseItensBoleto(workbook, fileName) {
   if (!sheet) return [];
   const rows = sheetRows(sheet);
   const headerIndex = findHeaderIndex(rows, (row) => row.includes("CONSULTOR") && row.includes("TOTAL"));
-  const items = buildObjects(rows, headerIndex);
+  if (headerIndex < 0) return [];
   const monthKey = inferMonthFromWorkbook(workbook, fileName);
 
-  return items
-    .filter((row) => row.CONSULTOR)
+  const consultorIndex = 0; // coluna A
+  const boleto1QtdIndex = 2; // coluna C
+  const boleto1PctIndex = 3; // coluna D
+
+  return rows
+    .slice(headerIndex + 1)
+    .filter((row) => row.some((cell) => cell !== null && cell !== ""))
+    .map((row) => {
+      const consultorRaw = row[consultorIndex];
+      return {
+        consultorKey: normalizeName(consultorRaw),
+        consultor: String(consultorRaw ?? ""),
+        monthKey,
+        boleto1Qtd: toNumber(row[boleto1QtdIndex]),
+        boleto1Pct: normalizeRatio(toNumber(row[boleto1PctIndex])),
+      };
+    })
+    .filter((row) => row.consultorKey && row.consultorKey !== "TOTAL");
+}
+
+function parseConsultorMetricByColumn(workbook, fileName, columnIndex, valueKey) {
+  const sheet = workbook.Sheets["CONSULTOR"];
+  if (!sheet) return [];
+  const rows = sheetRows(sheet);
+  const headerIndex = findHeaderIndex(rows, (row) => row.includes("CONSULTOR"));
+  if (headerIndex < 0) return [];
+
+  const headerRow = rows[headerIndex].map((cell) => normalizeName(cell));
+  const consultorIndex = headerRow.findIndex((cell) => cell === "CONSULTOR");
+  const pdvIndex = headerRow.findIndex((cell) => cell === "PDV");
+  const monthKey = inferMonthFromWorkbook(workbook, fileName);
+
+  return rows
+    .slice(headerIndex + 1)
+    .filter((row) => row.some((cell) => cell !== null && cell !== ""))
     .map((row) => ({
-      consultorKey: normalizeName(row.CONSULTOR),
-      consultor: String(row.CONSULTOR ?? ""),
+      pdv: String((pdvIndex >= 0 ? row[pdvIndex] : "") ?? ""),
+      consultorKey: normalizeName(consultorIndex >= 0 ? row[consultorIndex] : ""),
+      consultor: String((consultorIndex >= 0 ? row[consultorIndex] : "") ?? ""),
       monthKey,
-      boleto1Qtd: toNumber(row.QUANTIDADE),
-      boleto1Pct: toNumber(row["PARTICIPACAO (%)"] || row["PARTICIPAÇÃO (%)"]),
-    }));
+      [valueKey]: normalizeRatio(toNumber(row[columnIndex])),
+    }))
+    .filter((row) => row.consultorKey && row.consultorKey !== "TOTAL");
+}
+
+function parseBoletoPromocional(workbook, fileName) {
+  return parseConsultorMetricByColumn(workbook, fileName, 5, "bpPct");
+}
+
+function parseBoletoTurbinado(workbook, fileName) {
+  return parseConsultorMetricByColumn(workbook, fileName, 5, "btPct");
+}
+
+function parsePenetracaoSkin(workbook, fileName) {
+  return parseConsultorMetricByColumn(workbook, fileName, 2, "skinPct");
 }
 
 function parseFidelidadePenetracao(workbook, fileName) {
@@ -250,7 +342,7 @@ function parseFidelidadePenetracao(workbook, fileName) {
       consultorKey: normalizeName(row.CONSULTOR || row.Consultor),
       consultor: String(row.CONSULTOR || row.Consultor || ""),
       monthKey,
-      fidelidadePenetracao: toNumber(row["% PENETRACAO DESAFIO FIDELIDADE"] || row["% PENETRAÇÃO DESAFIO FIDELIDADE"]),
+      fidelidadePenetracao: normalizeRatio(toNumber(row["% PENETRACAO DESAFIO FIDELIDADE"] || row["% PENETRAÇÃO DESAFIO FIDELIDADE"])),
     }));
 }
 
@@ -259,17 +351,37 @@ function parseFidelidadeResgate(workbook, fileName) {
   if (!sheet) return [];
   const rows = sheetRows(sheet);
   const headerIndex = findHeaderIndex(rows, (row) => row.includes("CP/PDV/CONSULTOR"));
-  const items = buildObjects(rows, headerIndex);
-  const monthKey = inferMonthFromWorkbook(workbook, fileName);
+  if (headerIndex < 0) return [];
 
-  return items
-    .filter((row) => row["CP/PDV/CONSULTOR"] && normalizeName(row["CP/PDV/CONSULTOR"]) !== "TOTAL")
-    .map((row) => ({
-      consultorKey: normalizeName(row["CP/PDV/CONSULTOR"]),
-      consultor: String(row["CP/PDV/CONSULTOR"] ?? ""),
-      monthKey,
-      fidelidadeResgatePct: toNumber(row["PERIODO ATUAL"] || row["PERÍODO ATUAL"]),
-    }));
+  const monthKey = inferMonthFromWorkbook(workbook, fileName);
+  const consultorIndex = 0; // coluna A
+  const periodoAtualIndex = 2; // coluna C
+
+  return rows
+    .slice(headerIndex + 1)
+    .filter((row) => row.some((cell) => cell !== null && cell !== ""))
+    .map((row) => {
+      const consultorRaw = row[consultorIndex];
+      const resgateRaw = row[periodoAtualIndex];
+
+      let parsed = 0;
+      if (typeof resgateRaw === "number") {
+        parsed = resgateRaw;
+      } else {
+        const txt = String(resgateRaw ?? "").trim();
+        if (txt) {
+          parsed = Number(txt.replace(",", "."));
+        }
+      }
+
+      return {
+        consultorKey: normalizeName(consultorRaw),
+        consultor: String(consultorRaw ?? ""),
+        monthKey,
+        fidelidadeResgatePct: Number.isFinite(parsed) ? normalizeRatio(parsed) : 0,
+      };
+    })
+    .filter((row) => row.consultorKey && row.consultorKey !== "TOTAL");
 }
 
 function parseTreinamento(workbook, fileName) {
@@ -287,7 +399,7 @@ function parseTreinamento(workbook, fileName) {
       consultorKey: normalizeName(row.NOME),
       consultor: String(row.NOME ?? ""),
       monthKey,
-      treinamento: toNumber(row["ADESAO IAF"] || row["ADESÃO IAF"]),
+      treinamento: normalizeRatio(toNumber(row["ADESAO IAF"] || row["ADESÃO IAF"])),
     }));
 }
 
@@ -311,27 +423,45 @@ function parseServicos(workbook, fileName) {
 }
 
 
+function metaValue(row, aliases, formatter = toNumber) {
+  for (const alias of aliases) {
+    if (Object.prototype.hasOwnProperty.call(row, alias)) return formatter(row[alias]);
+  }
+  return formatter("");
+}
+
 function parseMetas(workbook) {
   const sheetName = workbook.SheetNames[0];
   const sheet = workbook.Sheets[sheetName];
   if (!sheet) return [];
-  const rows = XLSX.utils.sheet_to_json(sheet, { defval: "" });
+  const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
 
   return rows
-    .filter((row) => row["Consultor"] || row["PDV"])
+    .slice(1)
     .map((row) => ({
-      pdv: String(row["PDV"] ?? "").trim(),
-      consultorKey: normalizeName(row["Consultor"]),
-      consultor: String(row["Consultor"] ?? "").trim(),
-      metaReceita: toNumber(row["Meta Receita"]),
-      metaTicketMedio: toNumber(row["Meta Ticket Medio"]),
-      metaItensPorBoleto: toNumber(row["Meta Itens/Boleto"]),
-      metaConversao: toNumber(row["Meta Conversao"]),
-      metaB1: toNumber(row["Meta B1"]),
-      metaFidelidadePenetracao: toNumber(row["Meta Fidelidade Penetracao"]),
-      metaFidelidadeResgate: toNumber(row["Meta Fidelidade Resgate"]),
-      metaTreinamento: toNumber(row["Meta Treinamento"]),
-    }));
+      pdv: String(row[0] ?? "").trim(),
+      consultorKey: normalizeName(row[1]),
+      consultor: String(row[1] ?? "").trim(),
+
+      metaReceita: toNumber(row[2]),
+      metaTicketMedio: toNumber(row[3]),
+      metaItensPorBoleto: toNumber(row[4]),
+      metaConversao: normalizeRatio(toNumber(row[5])),
+      metaB1: normalizeRatio(toNumber(row[6])),
+
+      // Confirmado pelo usuário no arquivo de metas:
+      // P = coluna 15 (0-based) = Meta BP
+      // S = coluna 18 (0-based) = Meta Skin
+      metaBp: normalizeRatio(toNumber(row[15])),
+      metaBt: normalizeRatio(toNumber(row[16])),
+      metaFidelidadePenetracao: normalizeRatio(toNumber(row[17])),
+      metaSkin: normalizeRatio(toNumber(row[18])),
+
+      // Mantidos conforme estrutura anterior da page
+      metaFidelidadeResgate: normalizeRatio(toNumber(row[8])),
+      metaTreinamento: normalizeRatio(toNumber(row[9])),
+    }))
+    .filter((row) => row.consultorKey);
 }
 
 function exportarModeloMetas(rows) {
@@ -343,6 +473,9 @@ function exportarModeloMetas(rows) {
     "Meta Itens/Boleto",
     "Meta Conversao",
     "Meta B1",
+    "Meta BP",
+    "Meta BT",
+    "Meta Penetracao Skin",
     "Meta Fidelidade Penetracao",
     "Meta Fidelidade Resgate",
     "Meta Treinamento",
@@ -361,6 +494,9 @@ function exportarModeloMetas(rows) {
       "",
       "",
       "",
+      "",
+      "",
+      "",
     ]),
   ];
 
@@ -368,7 +504,8 @@ function exportarModeloMetas(rows) {
   const ws = XLSX.utils.aoa_to_sheet(data);
   ws["!cols"] = [
     { wch: 12 }, { wch: 32 }, { wch: 14 }, { wch: 18 }, { wch: 18 },
-    { wch: 16 }, { wch: 12 }, { wch: 28 }, { wch: 24 }, { wch: 18 },
+    { wch: 16 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 18 },
+    { wch: 28 }, { wch: 24 }, { wch: 18 },
   ];
   XLSX.utils.book_append_sheet(wb, ws, "Metas");
   XLSX.writeFile(wb, "modelo-metas-gerado.xlsx");
@@ -380,6 +517,9 @@ function parseWorkbook(fileName, workbook) {
   if (normalized.includes(KNOWN_FILES.acaoFluxo)) return { type: "acaoFluxo", rows: parseAcaoFluxo(workbook, fileName) };
   if (normalized.includes(KNOWN_FILES.idCliente)) return { type: "idCliente", rows: parseIdCliente(workbook, fileName) };
   if (normalized.includes(KNOWN_FILES.itensBoleto)) return { type: "itensBoleto", rows: parseItensBoleto(workbook, fileName) };
+  if (normalized.includes(KNOWN_FILES.boletoPromocional)) return { type: "boletoPromocional", rows: parseBoletoPromocional(workbook, fileName) };
+  if (normalized.includes(KNOWN_FILES.boletoTurbinado)) return { type: "boletoTurbinado", rows: parseBoletoTurbinado(workbook, fileName) };
+  if (normalized.includes(KNOWN_FILES.penetracaoSkin)) return { type: "penetracaoSkin", rows: parsePenetracaoSkin(workbook, fileName) };
   if (normalized.includes(KNOWN_FILES.fidelidadePenetracao)) return { type: "fidelidadePenetracao", rows: parseFidelidadePenetracao(workbook, fileName) };
   if (normalized.includes(KNOWN_FILES.fidelidadeResgate)) return { type: "fidelidadeResgate", rows: parseFidelidadeResgate(workbook, fileName) };
   if (normalized.includes(KNOWN_FILES.treinamento)) return { type: "treinamento", rows: parseTreinamento(workbook, fileName) };
@@ -401,6 +541,9 @@ function aggregateData(parsed) {
         receita: 0,
         boletos: 0,
         boletosB1: 0,
+        bpPct: null,
+        btPct: null,
+        skinPct: null,
         itens: 0,
         resgates: 0,
         conversoes: 0,
@@ -414,12 +557,16 @@ function aggregateData(parsed) {
         precoMedio: 0,
         itensPorBoleto: 0,
         servicos: 0,
+        b1PctImported: null,
         metas: {
           receita: 0,
           ticketMedio: 0,
           itensPorBoleto: 0,
           conversao: 0,
           b1: 0,
+          bp: 0,
+          bt: 0,
+          skin: 0,
           fidelidadePenetracao: 0,
           fidelidadeResgate: 0,
           treinamento: 0,
@@ -465,28 +612,44 @@ function aggregateData(parsed) {
       }
       if (type === "itensBoleto") {
         target.boletosB1 = Math.max(target.boletosB1, row.boleto1Qtd || 0);
+        target.b1PctImported = row.boleto1Pct ?? target.b1PctImported;
       }
+      if (type === "boletoPromocional") target.bpPct = row.bpPct ?? target.bpPct;
+      if (type === "boletoTurbinado") target.btPct = row.btPct ?? target.btPct;
+      if (type === "penetracaoSkin") target.skinPct = row.skinPct ?? target.skinPct;
       if (type === "fidelidadePenetracao") target.fidelidadePenetracao = row.fidelidadePenetracao ?? target.fidelidadePenetracao;
       if (type === "fidelidadeResgate") target.fidelidadeResgatePct = row.fidelidadeResgatePct ?? target.fidelidadeResgatePct;
       if (type === "treinamento") target.treinamento = row.treinamento ?? target.treinamento;
       if (type === "servicos") target.servicos += row.quantidadeServicos || 0;
       if (type === "metas") {
-        target.metas = {
-          receita: row.metaReceita || 0,
-          ticketMedio: row.metaTicketMedio || 0,
-          itensPorBoleto: row.metaItensPorBoleto || 0,
-          conversao: row.metaConversao || 0,
-          b1: row.metaB1 || 0,
-          fidelidadePenetracao: row.metaFidelidadePenetracao || 0,
-          fidelidadeResgate: row.metaFidelidadeResgate || 0,
-          treinamento: row.metaTreinamento || 0,
-        };
+        const rowPdv = String(row.pdv || "").trim();
+        const targetPdv = String(target.pdv || "").trim();
+        const samePdv = !rowPdv || !targetPdv || rowPdv === targetPdv;
+
+        if (samePdv) {
+          target.metas = {
+            receita: row.metaReceita ?? 0,
+            ticketMedio: row.metaTicketMedio ?? 0,
+            itensPorBoleto: row.metaItensPorBoleto ?? 0,
+            conversao: row.metaConversao ?? 0,
+            b1: row.metaB1 ?? 0,
+            bp: row.metaBp ?? 0,
+            bt: row.metaBt ?? 0,
+            skin: row.metaSkin ?? 0,
+            fidelidadePenetracao: row.metaFidelidadePenetracao ?? 0,
+            fidelidadeResgate: row.metaFidelidadeResgate ?? 0,
+            treinamento: row.metaTreinamento ?? 0,
+          };
+        }
       }
     });
   });
 
   const ranked = Array.from(map.values()).map((item) => {
-    const b1Pct = item.boletos > 0 ? item.boletosB1 / item.boletos : 0;
+    const b1Pct = item.b1PctImported ?? (item.boletos > 0 ? item.boletosB1 / item.boletos : 0);
+    const bpPct = item.bpPct || 0;
+    const btPct = item.btPct || 0;
+    const skinPct = item.skinPct || 0;
     const conversao = item.resgates > 0 ? item.conversoes / item.resgates : 0;
     const metas = item.metas || {};
 
@@ -494,7 +657,10 @@ function aggregateData(parsed) {
     const scoreTicket = metas.ticketMedio > 0 ? Math.min(item.ticketMedio / metas.ticketMedio, 1.3) : (item.ticketMedio ? Math.min(item.ticketMedio / 140, 1.3) : 0);
     const scoreItens = metas.itensPorBoleto > 0 ? Math.min(item.itensPorBoleto / metas.itensPorBoleto, 1.3) : (item.itensPorBoleto ? Math.min(item.itensPorBoleto / 2.2, 1.3) : 0);
     const scoreConversao = metas.conversao > 0 ? Math.min(conversao / metas.conversao, 1.3) : (conversao ? Math.min(conversao / 0.19, 1.3) : 0);
-    const scoreB1 = metas.b1 > 0 ? Math.min(b1Pct / metas.b1, 1.3) : (b1Pct ? Math.min(b1Pct / 0.30, 1.3) : 0);
+    const scoreB1 = metas.b1 > 0 ? Math.min(safeInverseRatio(b1Pct, metas.b1, 0), 1.3) : (b1Pct ? Math.min(0.30 / b1Pct, 1.3) : 0);
+    const scoreBp = metas.bp > 0 ? Math.min(bpPct / metas.bp, 1.3) : (bpPct ? Math.min(bpPct / 0.10, 1.3) : 0);
+    const scoreBt = metas.bt > 0 ? Math.min(btPct / metas.bt, 1.3) : (btPct ? Math.min(btPct / 0.10, 1.3) : 0);
+    const scoreSkin = metas.skin > 0 ? Math.min(skinPct / metas.skin, 1.3) : (skinPct ? Math.min(skinPct / 0.10, 1.3) : 0);
     const scoreFidelidadePenetracao = metas.fidelidadePenetracao > 0 ? Math.min((item.fidelidadePenetracao || 0) / metas.fidelidadePenetracao, 1.3) : (item.fidelidadePenetracao ? Math.min(item.fidelidadePenetracao / 0.16, 1.3) : 0);
     const scoreFidelidadeResgate = metas.fidelidadeResgate > 0 ? Math.min((item.fidelidadeResgatePct || 0) / metas.fidelidadeResgate, 1.3) : (item.fidelidadeResgatePct ? Math.min(item.fidelidadeResgatePct / 0.10, 1.3) : 0);
     const scoreTreinamento = metas.treinamento > 0 ? Math.min((item.treinamento || 0) / metas.treinamento, 1.3) : (item.treinamento || 0);
@@ -505,6 +671,9 @@ function aggregateData(parsed) {
       scoreItens,
       scoreConversao,
       scoreB1,
+      scoreBp,
+      scoreBt,
+      scoreSkin,
       scoreFidelidadePenetracao,
       scoreFidelidadeResgate,
       scoreTreinamento,
@@ -515,6 +684,9 @@ function aggregateData(parsed) {
     return {
       ...item,
       b1Pct,
+      bpPct,
+      btPct,
+      skinPct,
       conversao,
       score,
       scorePct: Math.min((score / 1.1) * 100, 100),
@@ -535,23 +707,23 @@ function aggregateData(parsed) {
 }
 
 function Card({ children, style }) {
-  return <div style={{ background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 18, boxShadow: "0 4px 18px rgba(15,23,42,0.06)", ...style }}>{children}</div>;
+  return <div style={{ background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 18, boxShadow: "0 8px 28px rgba(0,0,0,0.28)", ...style }}>{children}</div>;
 }
 
 function MetricCard({ title, value, subtitle, gaugeColor = COLORS.orange, percent = 0, icon }) {
   const Icon = icon;
   const safe = Math.max(0, Math.min(100, percent || 0));
   return (
-    <Card style={{ padding: 18 }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-        <div style={{ fontSize: 16, fontWeight: 800, color: COLORS.text }}>{title}</div>
-        {Icon ? <Icon size={18} color={COLORS.subtext} /> : null}
+    <Card style={{ padding: 14 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8, gap: 8 }}>
+        <div style={{ fontSize: 14, fontWeight: 800, color: COLORS.text, lineHeight: 1.15 }}>{title}</div>
+        {Icon ? <Icon size={16} color={COLORS.subtext} /> : null}
       </div>
-      <div style={{ fontSize: 18, color: COLORS.subtext, marginBottom: 10 }}>{value}</div>
-      <div style={{ height: 10, background: "#edf1f5", borderRadius: 999, overflow: "hidden" }}>
+      <div style={{ fontSize: 16, color: COLORS.subtext, marginBottom: 8, fontWeight: 700 }}>{value}</div>
+      <div style={{ height: 10, background: "rgba(255,255,255,0.08)", borderRadius: 999, overflow: "hidden" }}>
         <div style={{ width: `${safe}%`, height: "100%", background: gaugeColor, borderRadius: 999 }} />
       </div>
-      <div style={{ marginTop: 10, fontSize: 13, color: COLORS.subtext }}>{subtitle}</div>
+      <div style={{ marginTop: 8, fontSize: 12, color: COLORS.subtext, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{subtitle}</div>
     </Card>
   );
 }
@@ -571,7 +743,7 @@ function SelectField({ label, value, onChange, options }) {
           padding: "0 14px",
           fontSize: 15,
           color: COLORS.text,
-          background: "#fff",
+          background: COLORS.panelAlt,
           outline: "none",
         }}
       >
@@ -579,6 +751,43 @@ function SelectField({ label, value, onChange, options }) {
           <option key={opt.value} value={opt.value}>{opt.label}</option>
         ))}
       </select>
+    </div>
+  );
+}
+
+
+
+function RankingTooltip({ active, payload, label, metricTab }) {
+  if (!active || !payload || !payload.length) return null;
+  const item = payload[0].payload || {};
+  const valor = Number(item.valor || 0);
+  const metaValor = Number(item.metaValor || 0);
+  const atingimento = Number(item.atingimento || 0);
+
+  const formatMetricValue = (v) => {
+    if (metricTab === "receita") return formatCurrency(v);
+    return `${formatNumber(v, 2)}%`;
+  };
+
+  return (
+    <div style={{
+      background: COLORS.panel,
+      border: `1px solid ${COLORS.border}`,
+      borderRadius: 12,
+      padding: 10,
+      boxShadow: "0 8px 24px rgba(0,0,0,0.28)",
+      minWidth: 190
+    }}>
+      <div style={{ fontSize: 13, fontWeight: 900, color: COLORS.text, marginBottom: 6 }}>{label}</div>
+      <div style={{ fontSize: 12, color: COLORS.subtext, marginBottom: 4 }}>
+        Realizado: <span style={{ color: COLORS.text, fontWeight: 800 }}>{formatMetricValue(valor)}</span>
+      </div>
+      <div style={{ fontSize: 12, color: COLORS.subtext, marginBottom: 4 }}>
+        Meta: <span style={{ color: COLORS.text, fontWeight: 800 }}>{formatMetricValue(metaValor)}</span>
+      </div>
+      <div style={{ fontSize: 12, color: COLORS.subtext }}>
+        Atingimento: <span style={{ color: performanceColor(atingimento), fontWeight: 900 }}>{formatPercent(atingimento || 0, 1)}</span>
+      </div>
     </div>
   );
 }
@@ -595,6 +804,15 @@ function exportarRelatorioConsultores(rows) {
     "B1",
     "Meta B1",
     "Ating. B1",
+    "BP",
+    "Meta BP",
+    "Ating. BP",
+    "BT",
+    "Meta BT",
+    "Ating. BT",
+    "Penetracao Skin",
+    "Meta Penetracao Skin",
+    "Ating. Penetracao Skin",
     "Boleto Medio",
     "Meta Boleto Medio",
     "Ating. Boleto Medio",
@@ -618,6 +836,7 @@ function exportarRelatorioConsultores(rows) {
   ];
 
   const pct = (value, meta) => (meta > 0 ? value / meta : null);
+  const pctInverse = (value, meta) => (meta > 0 ? (value > 0 ? meta / value : 1) : null);
 
   const getStatus = (score) => {
     if (score >= 1) return "🟢 Acima da meta";
@@ -634,7 +853,16 @@ function exportarRelatorioConsultores(rows) {
     item.boletos || 0,
     item.b1Pct || 0,
     item.metas?.b1 || 0,
-    pct(item.b1Pct || 0, item.metas?.b1 || 0),
+    pctInverse(item.b1Pct || 0, item.metas?.b1 || 0),
+    item.bpPct || 0,
+    item.metas?.bp || 0,
+    pct(item.bpPct || 0, item.metas?.bp || 0),
+    item.btPct || 0,
+    item.metas?.bt || 0,
+    pct(item.btPct || 0, item.metas?.bt || 0),
+    item.skinPct || 0,
+    item.metas?.skin || 0,
+    pct(item.skinPct || 0, item.metas?.skin || 0),
     item.ticketMedio || 0,
     item.metas?.ticketMedio || 0,
     pct(item.ticketMedio || 0, item.metas?.ticketMedio || 0),
@@ -662,14 +890,18 @@ function exportarRelatorioConsultores(rows) {
 
   ws["!cols"] = [
     { wch: 12 }, { wch: 32 }, { wch: 14 }, { wch: 14 }, { wch: 12 },
-    { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 12 }, { wch: 14 },
-    { wch: 18 }, { wch: 16 }, { wch: 14 }, { wch: 18 }, { wch: 16 },
-    { wch: 12 }, { wch: 14 }, { wch: 14 }, { wch: 20 }, { wch: 24 },
-    { wch: 22 }, { wch: 18 }, { wch: 22 }, { wch: 20 }, { wch: 14 },
-    { wch: 16 }, { wch: 16 }, { wch: 12 }, { wch: 18 },
+    { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 12 },
+    { wch: 10 }, { wch: 10 }, { wch: 12 },
+    { wch: 10 }, { wch: 10 }, { wch: 12 },
+    { wch: 16 }, { wch: 16 }, { wch: 18 },
+    { wch: 14 }, { wch: 18 }, { wch: 16 },
+    { wch: 12 }, { wch: 14 }, { wch: 14 },
+    { wch: 20 }, { wch: 24 }, { wch: 22 },
+    { wch: 18 }, { wch: 22 }, { wch: 20 },
+    { wch: 14 }, { wch: 16 }, { wch: 16 }, { wch: 12 }, { wch: 18 },
   ];
 
-  const percentCols = [5, 8, 11, 14, 17, 20, 23, 26, 27];  // 1-based columns for attainment/score-like fields except score
+  const percentCols = [5, 8, 11, 14, 17, 20, 23, 26, 29, 32, 33, 34];  // 1-based columns for attainment/score-like fields except score
   for (let rowIdx = 2; rowIdx <= data.length + 1; rowIdx++) {
     for (const col of percentCols) {
       const cellRef = XLSX.utils.encode_cell({ r: rowIdx - 1, c: col - 1 });
@@ -677,12 +909,12 @@ function exportarRelatorioConsultores(rows) {
         ws[cellRef].z = "0.0%";
       }
     }
-    const scoreRef = XLSX.utils.encode_cell({ r: rowIdx - 1, c: 27 });
+    const scoreRef = XLSX.utils.encode_cell({ r: rowIdx - 1, c: 33 });
       }
 
   // format score column as percentage
   for (let rowIdx = 2; rowIdx <= data.length + 1; rowIdx++) {
-    const scoreRef = XLSX.utils.encode_cell({ r: rowIdx - 1, c: 27 });
+    const scoreRef = XLSX.utils.encode_cell({ r: rowIdx - 1, c: 33 });
     if (ws[scoreRef] && typeof ws[scoreRef].v === "number") {
       ws[scoreRef].z = "0.0%";
     }
@@ -699,6 +931,9 @@ export default function Page() {
     acaoFluxo: [],
     idCliente: [],
     itensBoleto: [],
+    boletoPromocional: [],
+    boletoTurbinado: [],
+    penetracaoSkin: [],
     fidelidadePenetracao: [],
     fidelidadeResgate: [],
     treinamento: [],
@@ -711,17 +946,24 @@ export default function Page() {
   const [metricTab, setMetricTab] = useState("score");
   const [rankingType, setRankingType] = useState("consultor");
   const [isDragging, setIsDragging] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
   const fileInputRef = useRef(null);
   const dragCounterRef = useRef(0);
 
-  const handleFiles = useCallback(async (fileList) => {
+  
+const handleFiles = useCallback(async (fileList) => {
     const files = Array.from(fileList || []);
+    setIsProcessing(true);
+    try {
     const next = {
       lojaIndicadores: [],
       acaoFluxo: [],
       idCliente: [],
       itensBoleto: [],
-      fidelidadePenetracao: [],
+      boletoPromocional: [],
+    boletoTurbinado: [],
+    penetracaoSkin: [],
+    fidelidadePenetracao: [],
       fidelidadeResgate: [],
       treinamento: [],
       servicos: [],
@@ -739,7 +981,83 @@ export default function Page() {
 
     setParsed(next);
     setFilesLoaded(files.map((f) => f.name));
+    } finally {
+      setIsProcessing(false);
+    }
   }, []);
+
+  const collectFilesFromItems = useCallback(async (items) => {
+    const files = [];
+
+    const walkEntry = async (entry) => {
+      if (!entry) return;
+
+      if (entry.isFile) {
+        await new Promise((resolve) => {
+          entry.file((file) => {
+            if (file && /\.xlsx$/i.test(file.name)) files.push(file);
+            resolve();
+          });
+        });
+        return;
+      }
+
+      if (entry.isDirectory) {
+        const reader = entry.createReader();
+
+        const readEntriesBatch = () =>
+          new Promise((resolve, reject) => {
+            reader.readEntries(resolve, reject);
+          });
+
+        while (true) {
+          const entries = await readEntriesBatch();
+          if (!entries.length) break;
+          for (const child of entries) {
+            await walkEntry(child);
+          }
+        }
+      }
+    };
+
+    for (const item of Array.from(items || [])) {
+      const entry = item.webkitGetAsEntry ? item.webkitGetAsEntry() : null;
+      if (entry) {
+        await walkEntry(entry);
+      }
+    }
+
+    return files;
+  }, []);
+
+  const handleDropZoneDrop = useCallback(async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounterRef.current = 0;
+    setIsDragging(false);
+
+    const items = e.dataTransfer?.items;
+    if (items?.length) {
+      const hasDirectory = Array.from(items).some((item) => {
+        const entry = item.webkitGetAsEntry ? item.webkitGetAsEntry() : null;
+        return entry?.isDirectory;
+      });
+
+      if (hasDirectory) {
+        const folderFiles = await collectFilesFromItems(items);
+        if (folderFiles.length) {
+          await handleFiles(folderFiles);
+          return;
+        }
+      }
+    }
+
+    const files = Array.from(e.dataTransfer?.files || []).filter((file) => /\.xlsx$/i.test(file.name));
+    if (files.length) {
+      await handleFiles(files);
+    }
+  }, [collectFilesFromItems, handleFiles]);
+
 
 
   const handleDragEnter = useCallback((e) => {
@@ -767,34 +1085,42 @@ export default function Page() {
     }
   }, []);
 
-  const handleDrop = useCallback((e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    dragCounterRef.current = 0;
-    setIsDragging(false);
-    const files = Array.from(e.dataTransfer?.files || []);
-    if (files.length) {
-      handleFiles(files);
-    }
-  }, [handleFiles]);
+  const handleDrop = useCallback(async (e) => {
+    await handleDropZoneDrop(e);
+  }, [handleDropZoneDrop]);
 
 
 
   const aggregated = useMemo(() => aggregateData(parsed), [parsed]);
 
-  const pdvs = useMemo(() => Array.from(new Set(aggregated.ranked.map((i) => i.pdv).filter(Boolean))).sort(), [aggregated]);
+  const pdvs = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          aggregated.ranked
+            .map((i) => String(i.pdv || "").trim())
+            .filter((v) => v && v.toUpperCase() !== "TOTAL" && v.toUpperCase() !== "TODOS")
+        )
+      ).sort(),
+    [aggregated]
+  );
 
   const consultores = useMemo(() => {
     return aggregated.ranked
-      .filter((item) => fPdv === "todos" || item.pdv === fPdv)
-      .map((item) => item.consultor)
+      .filter((item) => (fPdv === "todos" || item.pdv === fPdv))
+      .map((item) => String(item.consultor || "").trim())
+      .filter((name) => name && normalizeName(name) !== "TODOS" && normalizeName(name) !== "TOTAL")
       .sort((a, b) => a.localeCompare(b));
   }, [aggregated, fPdv]);
 
   const filtered = useMemo(() => {
     return aggregated.ranked.filter((item) => {
-      if (fPdv !== "todos" && item.pdv !== fPdv) return false;
-      if (fConsultor !== "todos" && item.consultor !== fConsultor) return false;
+      const pdv = String(item.pdv || "").trim();
+      const consultor = String(item.consultor || "").trim();
+      if (!consultor || normalizeName(consultor) === "TODOS" || normalizeName(consultor) === "TOTAL") return false;
+      if (pdv && (pdv.toUpperCase() === "TOTAL" || pdv.toUpperCase() === "TODOS")) return false;
+      if (fPdv !== "todos" && pdv !== fPdv) return false;
+      if (fConsultor !== "todos" && consultor !== fConsultor) return false;
       return true;
     });
   }, [aggregated, fPdv, fConsultor]);
@@ -808,15 +1134,25 @@ export default function Page() {
       acc.score += item.score;
       acc.conv += item.conversao;
       acc.b1 += item.b1Pct;
+      acc.bp += item.bpPct || 0;
+      acc.bt += item.btPct || 0;
+      acc.skin += item.skinPct || 0;
+      acc.fidelidadePenetracao += item.fidelidadePenetracao || 0;
+      acc.fidelidadeResgate += item.fidelidadeResgatePct || 0;
       acc.ticket += item.ticketMedio;
       return acc;
-    }, { receita: 0, score: 0, conv: 0, b1: 0, ticket: 0 });
+    }, { receita: 0, score: 0, conv: 0, b1: 0, bp: 0, bt: 0, skin: 0, fidelidadePenetracao: 0, fidelidadeResgate: 0, ticket: 0 });
 
     return {
       receita: total.receita / filtered.length,
       score: total.score / filtered.length,
       conv: total.conv / filtered.length,
       b1: total.b1 / filtered.length,
+      bp: total.bp / filtered.length,
+      bt: total.bt / filtered.length,
+      skin: total.skin / filtered.length,
+      fidelidadePenetracao: total.fidelidadePenetracao / filtered.length,
+      fidelidadeResgate: total.fidelidadeResgate / filtered.length,
       ticket: total.ticket / filtered.length,
     };
   }, [filtered]);
@@ -837,43 +1173,119 @@ export default function Page() {
         map.set(item.pdv, {
           pdv: item.pdv,
           receita: 0,
+          receitaMeta: 0,
           score: 0,
           conversao: 0,
+          conversaoMeta: 0,
           b1: 0,
+          b1Meta: 0,
+          bp: 0,
+          bpMeta: 0,
+          bt: 0,
+          btMeta: 0,
+          skin: 0,
+          skinMeta: 0,
           count: 0,
         });
       }
       const acc = map.get(item.pdv);
-      acc.receita += item.receita;
-      acc.score += item.score;
-      acc.conversao += item.conversao;
-      acc.b1 += item.b1Pct;
+      acc.receita += item.receita || 0;
+      acc.receitaMeta += item.metas?.receita || 0;
+      acc.score += item.score || 0;
+      acc.conversao += item.conversao || 0;
+      acc.conversaoMeta += item.metas?.conversao || 0;
+      acc.b1 += item.b1Pct || 0;
+      acc.b1Meta += item.metas?.b1 || 0;
+      acc.bp += item.bpPct || 0;
+      acc.bpMeta += item.metas?.bp || 0;
+      acc.bt += item.btPct || 0;
+      acc.btMeta += item.metas?.bt || 0;
+      acc.skin += item.skinPct || 0;
+      acc.skinMeta += item.metas?.skin || 0;
       acc.count += 1;
     });
 
     return Array.from(map.values())
-      .map((i) => ({
-        nome: i.pdv,
-        valor:
-          metricTab === "score" ? (i.score / i.count) * 100 :
-          metricTab === "receita" ? i.receita :
-          metricTab === "conversao" ? (i.conversao / i.count) * 100 :
-          (i.b1 / i.count) * 100,
-      }))
+      .map((i) => {
+        const avgScore = i.score / i.count;
+        const avgConversao = i.conversao / i.count;
+        const avgB1 = i.b1 / i.count;
+        const avgBp = i.bp / i.count;
+        const avgBt = i.bt / i.count;
+        const avgSkin = i.skin / i.count;
+        const ratio =
+          metricTab === "score" ? avgScore :
+          metricTab === "receita" ? safeRatio(i.receita, i.receitaMeta, i.receita > 0 ? 1 : 0) :
+          metricTab === "conversao" ? safeRatio(avgConversao, i.conversaoMeta / i.count, avgConversao ? avgConversao / 0.19 : 0) :
+          metricTab === "b1" ? safeRatio(avgB1, i.b1Meta / i.count, avgB1 ? avgB1 / 0.30 : 0) :
+          metricTab === "bp" ? safeRatio(avgBp, i.bpMeta / i.count, avgBp ? avgBp / 0.10 : 0) :
+          metricTab === "bt" ? safeRatio(avgBt, i.btMeta / i.count, avgBt ? avgBt / 0.10 : 0) :
+          safeRatio(avgSkin, i.skinMeta / i.count, avgSkin ? avgSkin / 0.10 : 0);
+
+        return {
+          nome: i.pdv,
+          valor:
+            metricTab === "score" ? avgScore * 100 :
+            metricTab === "receita" ? i.receita :
+            metricTab === "conversao" ? avgConversao * 100 :
+            metricTab === "b1" ? avgB1 * 100 :
+            metricTab === "bp" ? avgBp * 100 :
+            metricTab === "bt" ? avgBt * 100 :
+            avgSkin * 100,
+          metaValor:
+            metricTab === "score" ? 100 :
+            metricTab === "receita" ? i.receitaMeta :
+            metricTab === "conversao" ? (i.conversaoMeta / i.count) * 100 :
+            metricTab === "b1" ? (i.b1Meta / i.count) * 100 :
+            metricTab === "bp" ? (i.bpMeta / i.count) * 100 :
+            metricTab === "bt" ? (i.btMeta / i.count) * 100 :
+            (i.skinMeta / i.count) * 100,
+          atingimento: ratio,
+          cor: metricTab === "score" ? scoreColor(avgScore) : performanceColor(ratio),
+          filtroPdv: i.pdv,
+          filtroConsultor: "todos",
+        };
+      })
       .sort((a, b) => b.valor - a.valor)
-      .slice(0, 10);
+      .slice(0, filtered.length);
   }, [filtered, metricTab]);
 
   const rankingData = useMemo(() => {
     return filtered
-      .map((item) => ({
-        nome: item.consultor.split(" ").slice(0, 2).join(" "),
-        valor:
-          metricTab === "score" ? item.score * 100 :
-          metricTab === "receita" ? item.receita :
-          metricTab === "conversao" ? item.conversao * 100 :
-          item.b1Pct * 100,
-      }))
+      .map((item) => {
+        const ratio =
+          metricTab === "score" ? item.score :
+          metricTab === "receita" ? safeRatio(item.receita || 0, item.metas?.receita || 0, item.receita > 0 ? 1 : 0) :
+          metricTab === "conversao" ? safeRatio(item.conversao || 0, item.metas?.conversao || 0, item.conversao ? item.conversao / 0.19 : 0) :
+          metricTab === "b1" ? safeRatio(item.b1Pct || 0, item.metas?.b1 || 0, item.b1Pct ? item.b1Pct / 0.30 : 0) :
+          metricTab === "bp" ? safeRatio(item.bpPct || 0, item.metas?.bp || 0, item.bpPct ? item.bpPct / 0.10 : 0) :
+          metricTab === "bt" ? safeRatio(item.btPct || 0, item.metas?.bt || 0, item.btPct ? item.btPct / 0.10 : 0) :
+          safeRatio(item.skinPct || 0, item.metas?.skin || 0, item.skinPct ? item.skinPct / 0.10 : 0);
+
+        return {
+          nome: item.consultor.split(" ").slice(0, 2).join(" "),
+          valor:
+            metricTab === "score" ? item.score * 100 :
+            metricTab === "receita" ? item.receita :
+            metricTab === "conversao" ? item.conversao * 100 :
+            metricTab === "b1" ? item.b1Pct * 100 :
+            metricTab === "bp" ? (item.bpPct || 0) * 100 :
+            metricTab === "bt" ? (item.btPct || 0) * 100 :
+            (item.skinPct || 0) * 100,
+          metaValor:
+            metricTab === "score" ? 100 :
+            metricTab === "receita" ? (item.metas?.receita || 0) :
+            metricTab === "conversao" ? (item.metas?.conversao || 0) * 100 :
+            metricTab === "b1" ? (item.metas?.b1 || 0) * 100 :
+            metricTab === "bp" ? (item.metas?.bp || 0) * 100 :
+            metricTab === "bt" ? (item.metas?.bt || 0) * 100 :
+            (item.metas?.skin || 0) * 100,
+          atingimento: ratio,
+          cor: metricTab === "score" ? scoreColor(item.score) : performanceColor(ratio),
+          filtroPdv: item.pdv || "todos",
+          filtroConsultor: item.consultor,
+        };
+      })
       .sort((a, b) => b.valor - a.valor)
       .slice(0, 10);
   }, [filtered, metricTab]);
@@ -898,28 +1310,104 @@ export default function Page() {
   }, [filtered]);
 
 
+
+  const currentRatios = useMemo(() => {
+    if (!current) return null;
+    return {
+      receita: safeRatio(current.receita || 0, current.metas?.receita || 0, current.receita > 0 ? 1 : 0),
+      boletoMedio: safeRatio(current.ticketMedio || 0, current.metas?.ticketMedio || 0, current.ticketMedio ? current.ticketMedio / 140 : 0),
+      itensPorBoleto: safeRatio(current.itensPorBoleto || 0, current.metas?.itensPorBoleto || 0, current.itensPorBoleto ? current.itensPorBoleto / 2.2 : 0),
+      fidelidadePenetracao: safeRatio(current.fidelidadePenetracao || 0, current.metas?.fidelidadePenetracao || 0, current.fidelidadePenetracao ? current.fidelidadePenetracao / 0.16 : 0),
+      fidelidadeResgate: safeRatio(current.fidelidadeResgatePct || 0, current.metas?.fidelidadeResgate || 0, current.fidelidadeResgatePct ? current.fidelidadeResgatePct / 0.10 : 0),
+      treinamento: safeRatio(current.treinamento || 0, current.metas?.treinamento || 0, current.treinamento || 0),
+      b1: safeInverseRatio(current.b1Pct || 0, current.metas?.b1 || 0, current.b1Pct ? 0.30 / current.b1Pct : 0),
+      bp: safeRatio(current.bpPct || 0, current.metas?.bp || 0, current.bpPct ? current.bpPct / 0.10 : 0),
+      bt: safeRatio(current.btPct || 0, current.metas?.bt || 0, current.btPct ? current.btPct / 0.10 : 0),
+      skin: safeRatio(current.skinPct || 0, current.metas?.skin || 0, current.skinPct ? current.skinPct / 0.10 : 0),
+    };
+  }, [current]);
+
+
+  const averageRatios = useMemo(() => {
+    if (!average) return null;
+    const metaAvg = filtered.length
+      ? filtered.reduce((acc, item) => {
+          acc.receita += item.metas?.receita || 0;
+          acc.ticketMedio += item.metas?.ticketMedio || 0;
+          acc.conversao += item.metas?.conversao || 0;
+          acc.b1 += item.metas?.b1 || 0;
+          acc.bp += item.metas?.bp || 0;
+          acc.bt += item.metas?.bt || 0;
+          acc.skin += item.metas?.skin || 0;
+          acc.fidelidadePenetracao += item.metas?.fidelidadePenetracao || 0;
+          acc.fidelidadeResgate += item.metas?.fidelidadeResgate || 0;
+          acc.count += 1;
+          return acc;
+        }, { receita: 0, ticketMedio: 0, conversao: 0, b1: 0, bp: 0, bt: 0, skin: 0, fidelidadePenetracao: 0, fidelidadeResgate: 0, count: 0 })
+      : null;
+
+    if (!metaAvg || !metaAvg.count) return null;
+
+    return {
+      receita: safeRatio(average.receita || 0, metaAvg.receita / metaAvg.count, average.receita > 0 ? 1 : 0),
+      ticketMedio: safeRatio(average.ticket || 0, metaAvg.ticketMedio / metaAvg.count, average.ticket ? average.ticket / 140 : 0),
+      conversao: safeRatio(average.conv || 0, metaAvg.conversao / metaAvg.count, average.conv ? average.conv / 0.19 : 0),
+      b1: safeInverseRatio(average.b1 || 0, metaAvg.b1 / metaAvg.count, average.b1 ? 0.30 / average.b1 : 0),
+      bp: safeRatio(average.bp || 0, metaAvg.bp / metaAvg.count, average.bp ? average.bp / 0.10 : 0),
+      bt: safeRatio(average.bt || 0, metaAvg.bt / metaAvg.count, average.bt ? average.bt / 0.10 : 0),
+      skin: safeRatio(average.skin || 0, metaAvg.skin / metaAvg.count, average.skin ? average.skin / 0.10 : 0),
+      fidelidadePenetracao: safeRatio(average.fidelidadePenetracao || 0, metaAvg.fidelidadePenetracao / metaAvg.count, average.fidelidadePenetracao ? average.fidelidadePenetracao / 0.16 : 0),
+      fidelidadeResgate: safeRatio(average.fidelidadeResgate || 0, metaAvg.fidelidadeResgate / metaAvg.count, average.fidelidadeResgate ? average.fidelidadeResgate / 0.10 : 0),
+      score: average.score || 0,
+    };
+  }, [average, filtered]);
+
+
+  const rankingMetaValue = useMemo(() => {
+    const data = rankingType === "consultor" ? rankingData : rankingPdvData;
+    if (!data.length) return 0;
+    const metas = data.map((d) => Number(d.metaValor || 0)).filter((v) => Number.isFinite(v) && v > 0);
+    if (!metas.length) return 0;
+    return metas[0];
+  }, [rankingType, rankingData, rankingPdvData]);
+
+  const rankingSelectedData = rankingType === "consultor" ? rankingData : rankingPdvData;
+
+  const rankingChartHeight = useMemo(() => {
+    const base = 360;
+    const rows = rankingSelectedData.length || 0;
+    return Math.max(base, rows * 34);
+  }, [rankingSelectedData]);
+
   const noData = !aggregated.ranked.length;
 
   return (
     <div style={{ minHeight: "100vh", background: COLORS.bg, color: COLORS.text }}>
-      <div style={{ background: COLORS.navy, borderBottom: `4px solid ${COLORS.orange}` }}>
-        <div style={{ maxWidth: 1440, margin: "0 auto", padding: "18px 22px" }}>
-          <div style={{ fontSize: 15, fontWeight: 700, color: "#d7e2f3" }}>BI Service</div>
-          <div style={{ fontSize: 34, fontWeight: 900, color: "#fff", lineHeight: 1.1, marginTop: 4 }}>Dashboard Consultor</div>
-          <div style={{ fontSize: 14, color: "#c7d3ea", marginTop: 6 }}>Visual no padrão executivo, com contraste forte e leitura limpa.</div>
+      <div style={{ background: COLORS.navy, borderBottom: `1px solid ${COLORS.border}` }}>
+        <div style={{ maxWidth: 1440, margin: "0 auto", padding: "14px 22px", display: "flex", alignItems: "center", gap: 12 }}>
+          <img
+            src="/logo/logo.png"
+            alt="Logo"
+            style={{ width: 90, height: 90, objectFit: "contain", borderRadius: 10 }}
+          />
+          <div>
+            <div style={{ fontSize: 12, fontWeight: 700, color: COLORS.subtext }}>BI Service Beta</div>
+            <div style={{ fontSize: 30, fontWeight: 900, color: "#fff", lineHeight: 1.05 }}>Dashboard Consultor</div>
+            <div style={{ fontSize: 12, color: COLORS.subtext, marginTop: 3 }}>Upload inteligente • metas • ranking • relatório</div>
+          </div>
         </div>
       </div>
 
       <div style={{ maxWidth: 1440, margin: "0 auto", padding: 16 }}>
         <div style={{ display: "grid", gridTemplateColumns: "1.15fr 0.85fr", gap: 12, marginBottom: 12, alignItems: "stretch" }}>
-          <Card style={{ padding: 10, background: `linear-gradient(135deg, ${COLORS.panel} 0%, ${COLORS.orangeSoft} 100%)`, minHeight: 92, display: "flex", flexDirection: "column", justifyContent: "center" }}>
+          <Card style={{ padding: 10, background: `linear-gradient(135deg, ${COLORS.panel} 0%, ${COLORS.panelAlt} 100%)`, minHeight: 92, display: "flex", flexDirection: "column", justifyContent: "center" }}>
             <div style={{ fontSize: 11, fontWeight: 700, color: COLORS.subtext }}>Visão do consultor</div>
             <div style={{ fontSize: 18, fontWeight: 900, color: COLORS.text, marginTop: 4, lineHeight: 1.1 }}>Performance consolidada</div>
           </Card>
 
           <Card style={{ padding: 10, minHeight: 92, display: "flex", flexDirection: "column", justifyContent: "center" }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 8 }}>
-              <div style={{ fontSize: 11, fontWeight: 700, color: COLORS.subtext }}>Importar planilhas</div>
+              <div style={{ fontSize: 11, fontWeight: 700, color: COLORS.subtext }}>Importar planilhas/pasta</div>
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
                 <button
                   onClick={() => exportarModeloMetas(baseMetas)}
@@ -991,26 +1479,28 @@ export default function Page() {
             >
               <Upload size={18} color={isDragging ? COLORS.blue : COLORS.orange} />
               <div style={{ fontSize: 14, fontWeight: 800, color: COLORS.text, marginTop: 4, pointerEvents: "none" }}>
-                {isDragging ? "Solte os arquivos aqui" : "Selecionar ou arrastar arquivos .xlsx"}
+                {isProcessing ? "Processando arquivos..." : isDragging ? "Solte arquivos ou pasta aqui" : "Selecionar ou arrastar arquivos/pasta .xlsx"}
               </div>
               <input
                 ref={fileInputRef}
                 type="file"
                 multiple
                 accept=".xlsx"
+                webkitdirectory=""
+                directory=""
                 style={{ display: "none" }}
-                onChange={(e) => handleFiles(e.target.files)}
+                onChange={(e) => handleFiles(Array.from(e.target.files || []).filter((file) => /\.xlsx$/i.test(file.name)))}
               />
             </div>
             {!!filesLoaded.length && (
               <div style={{ marginTop: 8, display: "flex", gap: 8, flexWrap: "wrap" }}>
-                <span style={{ background: COLORS.orangeSoft, color: COLORS.text, border: `1px solid #f4d28a`, padding: "6px 10px", borderRadius: 999, fontSize: 12, fontWeight: 700 }}>
+                <span style={{ background: COLORS.orangeSoft, color: COLORS.text, border: `1px solid rgba(34,197,94,0.25)`, padding: "6px 10px", borderRadius: 999, fontSize: 12, fontWeight: 700 }}>
                   📁 {filesLoaded.length} {filesLoaded.length === 1 ? "arquivo carregado" : "arquivos carregados"}
                 </span>
                 <span style={{ background: COLORS.panelAlt, color: COLORS.text, border: `1px solid ${COLORS.border}`, padding: "6px 10px", borderRadius: 999, fontSize: 12, fontWeight: 700 }}>
                   🧾 {baseMetas.length} {baseMetas.length === 1 ? "linha para meta" : "linhas para metas"}
                 </span>
-                <span style={{ background: "#eefbf3", color: COLORS.text, border: `1px solid #b7e4c7`, padding: "6px 10px", borderRadius: 999, fontSize: 12, fontWeight: 700 }}>
+                <span style={{ background: "rgba(34,197,94,0.12)", color: COLORS.text, border: `1px solid rgba(34,197,94,0.25)`, padding: "6px 10px", borderRadius: 999, fontSize: 12, fontWeight: 700 }}>
                   📊 {relatorioRows.length} {relatorioRows.length === 1 ? "linha no relatório" : "linhas no relatório"}
                 </span>
               </div>
@@ -1042,31 +1532,17 @@ export default function Page() {
 
         {!noData && current ? (
           <>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(7, minmax(0, 1fr))", gap: 16, marginBottom: 16 }}>
-              <MetricCard title="Receita" value={formatCurrency(current.receita)} subtitle={current.metas?.receita ? `Meta: ${formatCurrency(current.metas.receita)}` : `PDV ${current.pdv || "-"}`} percent={current.metas?.receita ? Math.min((current.receita / current.metas.receita) * 100, 100) : current.scorePct} gaugeColor={COLORS.orange} icon={TrendingUp} />
-              <MetricCard title="Boletos" value={formatNumber(current.boletos)} subtitle={`B1: ${formatPercent(current.b1Pct)}`} percent={current.b1Pct * 100} gaugeColor={COLORS.green} icon={Target} />
-              <MetricCard title="Boleto Médio" value={formatCurrency(current.ticketMedio)} subtitle={current.metas?.ticketMedio ? `Meta: ${formatCurrency(current.metas.ticketMedio)}` : `Preço médio: ${formatCurrency(current.precoMedio)}`} percent={current.metas?.ticketMedio ? Math.min((current.ticketMedio / current.metas.ticketMedio) * 100, 100) : (current.ticketMedio / 140) * 100} gaugeColor={COLORS.green} icon={Store} />
-              <MetricCard title="Itens/Boleto" value={formatNumber(current.itensPorBoleto, 2)} subtitle={current.metas?.itensPorBoleto ? `Meta: ${formatNumber(current.metas.itensPorBoleto, 2)}` : `Itens: ${formatNumber(current.itens)}`} percent={current.metas?.itensPorBoleto ? Math.min((current.itensPorBoleto / current.metas.itensPorBoleto) * 100, 100) : (current.itensPorBoleto / 2.2) * 100} gaugeColor={COLORS.orange} icon={Users} />
-              
-<MetricCard
-  title="Fidelidade - Penetração"
-  value={formatPercent(current.fidelidadePenetracao || 0)}
-  subtitle={current.metas?.fidelidadePenetracao ? `Meta: ${formatPercent(current.metas.fidelidadePenetracao)}` : "Desafio fidelidade"}
-  percent={current.metas?.fidelidadePenetracao ? Math.min(((current.fidelidadePenetracao || 0) / current.metas.fidelidadePenetracao) * 100, 100) : (current.fidelidadePenetracao || 0) * 500}
-  gaugeColor={COLORS.green}
-  icon={Award}
-/>
-
-<MetricCard
-  title="Fidelidade - Resgate"
-  value={formatPercent(current.fidelidadeResgatePct || 0)}
-  subtitle={current.metas?.fidelidadeResgate ? `Meta: ${formatPercent(current.metas.fidelidadeResgate)}` : "Uso de benefícios"}
-  percent={current.metas?.fidelidadeResgate ? Math.min(((current.fidelidadeResgatePct || 0) / current.metas.fidelidadeResgate) * 100, 100) : (current.fidelidadeResgatePct || 0) * 500}
-  gaugeColor={COLORS.orange}
-  icon={Award}
-/>
-
-              <MetricCard title="Treinamento" value={formatPercent(current.treinamento || 0)} subtitle={current.metas?.treinamento ? `Meta: ${formatPercent(current.metas.treinamento)}` : `CPF válido IAF: ${formatPercent(current.boletosValidosIaf || 0)}`} percent={current.metas?.treinamento ? Math.min(((current.treinamento || 0) / current.metas.treinamento) * 100, 100) : (current.treinamento || 0) * 100} gaugeColor={COLORS.orange} icon={AlertTriangle} />
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(5, minmax(0, 1fr))", gap: 12, marginBottom: 16 }}>
+              <MetricCard title="Receita" value={formatCurrency(current.receita)} subtitle={current.metas?.receita ? `Meta: ${formatCurrency(current.metas.receita)}` : "Meta não informada"} percent={current.metas?.receita ? Math.min((current.receita / current.metas.receita) * 100, 100) : current.scorePct} gaugeColor={performanceColor(currentRatios?.receita || 0)} icon={TrendingUp} />
+              <MetricCard title="B1" value={formatPercent(current.b1Pct)} subtitle={current.metas?.b1 ? `Meta: ${formatPercent(current.metas.b1)}` : `Boletos: ${formatNumber(current.boletos)}`} percent={current.metas?.b1 ? inverseGaugePercent(current.b1Pct, current.metas.b1) : 0} gaugeColor={performanceColor(currentRatios?.b1 || 0)} icon={Target} />
+              <MetricCard title="BP" value={formatPercent(current.bpPct || 0)} subtitle={`Meta: ${formatPercent(current?.metas?.bp || 0)}`} percent={current.metas?.bp ? Math.min(((current.bpPct || 0) / current.metas.bp) * 100, 100) : (current.bpPct || 0) * 500} gaugeColor={performanceColor(currentRatios?.bp || 0)} icon={Target} />
+              <MetricCard title="BT" value={formatPercent(current.btPct || 0)} subtitle={current.metas?.bt ? `Meta: ${formatPercent(current.metas.bt)}` : "Boleto turbinado"} percent={current.metas?.bt ? Math.min(((current.btPct || 0) / current.metas.bt) * 100, 100) : (current.btPct || 0) * 500} gaugeColor={performanceColor(currentRatios?.bt || 0)} icon={Target} />
+              <MetricCard title="Boleto Médio" value={formatCurrency(current.ticketMedio)} subtitle={current.metas?.ticketMedio ? `Meta: ${formatCurrency(current.metas.ticketMedio)}` : `Preço médio: ${formatCurrency(current.precoMedio)}`} percent={current.metas?.ticketMedio ? Math.min((current.ticketMedio / current.metas.ticketMedio) * 100, 100) : (current.ticketMedio / 140) * 100} gaugeColor={performanceColor(currentRatios?.boletoMedio || 0)} icon={Store} />
+              <MetricCard title="Itens/Boleto" value={formatNumber(current.itensPorBoleto, 2)} subtitle={current.metas?.itensPorBoleto ? `Meta: ${formatNumber(current.metas.itensPorBoleto, 2)}` : `Itens: ${formatNumber(current.itens)}`} percent={current.metas?.itensPorBoleto ? Math.min((current.itensPorBoleto / current.metas.itensPorBoleto) * 100, 100) : (current.itensPorBoleto / 2.2) * 100} gaugeColor={performanceColor(currentRatios?.itensPorBoleto || 0)} icon={Users} />
+              <MetricCard title="Penetração Skin" value={formatPercent(current.skinPct || 0)} subtitle={`Meta: ${formatPercent(current?.metas?.skin || 0)}`} percent={current.metas?.skin ? Math.min(((current.skinPct || 0) / current.metas.skin) * 100, 100) : (current.skinPct || 0) * 500} gaugeColor={performanceColor(currentRatios?.skin || 0)} icon={Award} />
+              <MetricCard title="Fidelidade - Penetração" value={formatPercent(current.fidelidadePenetracao || 0)} subtitle={current.metas?.fidelidadePenetracao ? `Meta: ${formatPercent(current.metas.fidelidadePenetracao)}` : "Desafio fidelidade"} percent={current.metas?.fidelidadePenetracao ? Math.min(((current.fidelidadePenetracao || 0) / current.metas.fidelidadePenetracao) * 100, 100) : (current.fidelidadePenetracao || 0) * 500} gaugeColor={performanceColor(currentRatios?.fidelidadePenetracao || 0)} icon={Award} />
+              <MetricCard title="Fidelidade - Resgate" value={formatPercent(current.fidelidadeResgatePct || 0)} subtitle={current.metas?.fidelidadeResgate ? `Meta: ${formatPercent(current.metas.fidelidadeResgate)}` : "Uso de benefícios"} percent={current.metas?.fidelidadeResgate ? Math.min(((current.fidelidadeResgatePct || 0) / current.metas.fidelidadeResgate) * 100, 100) : (current.fidelidadeResgatePct || 0) * 500} gaugeColor={performanceColor(currentRatios?.fidelidadeResgate || 0)} icon={Award} />
+              <MetricCard title="Treinamento" value={formatPercent(current.treinamento || 0)} subtitle={current.metas?.treinamento ? `Meta: ${formatPercent(current.metas.treinamento)}` : `CPF válido IAF: ${formatPercent(current.boletosValidosIaf || 0)}`} percent={current.metas?.treinamento ? Math.min(((current.treinamento || 0) / current.metas.treinamento) * 100, 100) : (current.treinamento || 0) * 100} gaugeColor={performanceColor(currentRatios?.treinamento || 0)} icon={AlertTriangle} />
             </div>
 
             <div style={{ display: "grid", gridTemplateColumns: "1.3fr 0.9fr", gap: 16, marginBottom: 16 }}>
@@ -1074,7 +1550,7 @@ export default function Page() {
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, gap: 10, flexWrap: "wrap" }}>
                   <div>
                     <div style={{ fontSize: 20, fontWeight: 900 }}>Ranking de consultores</div>
-                    <div style={{ fontSize: 13, color: COLORS.subtext }}>Top 10 dentro do filtro atual</div>
+                    <div style={{ fontSize: 13, color: COLORS.subtext }}>Top 10 dentro do filtro atual • linha tracejada = meta</div>
                   </div>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "nowrap", width: "100%" }}>
                     <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
@@ -1097,12 +1573,15 @@ export default function Page() {
                         cursor: "pointer"
                       }}>PDVs</button>
                     </div>
-                    <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", flexWrap: "nowrap", flexShrink: 0 }}>
+                    <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap", flexShrink: 0 }}>
                     {[
                       ["score", "Score"],
                       ["receita", "Receita"],
                       ["conversao", "Conversão"],
                       ["b1", "B1"],
+                      ["bp", "BP"],
+                      ["bt", "BT"],
+                      ["skin", "Skin"],
                     ].map(([key, label]) => (
                       <button
                         key={key}
@@ -1123,35 +1602,75 @@ export default function Page() {
                     </div>
                   </div>
                 </div>
-                <div style={{ height: 360 }}>
+                <div style={{ height: rankingChartHeight, overflowY: rankingChartHeight > 360 ? "auto" : "visible" }}>
                   <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={rankingType === "consultor" ? rankingData : rankingPdvData} layout="vertical" margin={{ left: 30, right: 10, top: 8, bottom: 8 }}>
+                    <BarChart data={rankingSelectedData} layout="vertical" margin={{ left: 30, right: 10, top: 8, bottom: 8 }} onClick={(state) => {
+                      const payload = state?.activePayload?.[0]?.payload;
+                      if (!payload) return;
+
+                      if (rankingType === "consultor") {
+                        const sameConsultor = fConsultor !== "todos" && payload.filtroConsultor === fConsultor;
+                        const samePdv = fPdv !== "todos" && payload.filtroPdv === fPdv;
+
+                        if (sameConsultor && samePdv) {
+                          setFPdv("todos");
+                          setFConsultor("todos");
+                          return;
+                        }
+
+                        if (payload.filtroPdv) setFPdv(payload.filtroPdv);
+                        if (payload.filtroConsultor) setFConsultor(payload.filtroConsultor);
+                      } else {
+                        const samePdv = fPdv !== "todos" && payload.filtroPdv === fPdv;
+
+                        if (samePdv && fConsultor === "todos") {
+                          setFPdv("todos");
+                          setFConsultor("todos");
+                          return;
+                        }
+
+                        if (payload.filtroPdv) {
+                          setFPdv(payload.filtroPdv);
+                          setFConsultor("todos");
+                        }
+                      }
+                    }}>
                       <CartesianGrid strokeDasharray="3 3" />
                       <XAxis type="number" />
+                      {rankingMetaValue > 0 ? <ReferenceLine x={rankingMetaValue} stroke="#ffffff" strokeDasharray="6 6" ifOverflow="extendDomain" /> : null}
                       <YAxis dataKey="nome" type="category" width={120} />
-                      <Tooltip formatter={(value) => metricTab === "receita" ? formatCurrency(Number(value)) : formatNumber(Number(value), 1)} />
-                      <Bar dataKey="valor" fill={COLORS.blue} radius={[0, 12, 12, 0]} />
+                      <Tooltip formatter={(value) => metricTab === "receita" ? formatCurrency(Number(value)) : `${formatNumber(Number(value), 1)}%`} />
+                      <Bar dataKey="valor" radius={[0, 12, 12, 0]}>
+                        {rankingSelectedData.map((entry, index) => (
+                          <Cell key={`cell-${index}`} fill={entry.cor || COLORS.blue} />
+                        ))}
+                      </Bar>
                     </BarChart>
                   </ResponsiveContainer>
                 </div>
               </Card>
 
-              <Card style={{ padding: 18 }}>
-                <div style={{ fontSize: 20, fontWeight: 900, marginBottom: 14 }}>Comparativo com a média</div>
+              <Card style={{ padding: 16 }}>
+                <div style={{ fontSize: 18, fontWeight: 900, marginBottom: 12 }}>Comparativo com a média</div>
                 {average ? (
-                  <div style={{ display: "grid", gap: 12 }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                     {[
-                      ["Receita", formatCurrency(current.receita), formatCurrency(average.receita), current.receita >= average.receita],
-                      ["Score", formatPercent(current.score), formatPercent(average.score), current.score >= average.score],
-                      ["Ticket médio", formatCurrency(current.ticketMedio), formatCurrency(average.ticket), current.ticketMedio >= average.ticket],
-                      ["Conversão", formatPercent(current.conversao), formatPercent(average.conv), current.conversao >= average.conv],
-                      ["B1", formatPercent(current.b1Pct), formatPercent(average.b1), current.b1Pct >= average.b1],
-                    ].map(([label, mine, avg, ok]) => (
-                      <div key={label} style={{ background: COLORS.panelAlt, border: `1px solid ${COLORS.border}`, borderRadius: 14, padding: 14 }}>
-                        <div style={{ fontSize: 13, color: COLORS.subtext, fontWeight: 700 }}>{label}</div>
-                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 8 }}>
-                          <div style={{ fontWeight: 900, fontSize: 18 }}>{mine}</div>
-                          <div style={{ fontSize: 13, fontWeight: 800, color: ok ? COLORS.green : COLORS.red }}>Média {avg}</div>
+                      ["Receita", formatCurrency(current.receita), formatCurrency(average.receita), performanceColor(currentRatios?.receita || 0), performanceColor(averageRatios?.receita || 0)],
+                      ["Score", formatPercent(current.score), formatPercent(average.score), performanceColor(current.score || 0), performanceColor(averageRatios?.score || 0)],
+                      ["Ticket médio", formatCurrency(current.ticketMedio), formatCurrency(average.ticket), performanceColor(currentRatios?.boletoMedio || 0), performanceColor(averageRatios?.ticketMedio || 0)],
+                      ["Conversão", formatPercent(current.conversao), formatPercent(average.conv), performanceColor(safeRatio(current.conversao || 0, current.metas?.conversao || 0, current.conversao ? current.conversao / 0.19 : 0)), performanceColor(averageRatios?.conversao || 0)],
+                      ["B1", formatPercent(current.b1Pct), formatPercent(average.b1), performanceColor(currentRatios?.b1 || 0), performanceColor(averageRatios?.b1 || 0)],
+                      ["BP", formatPercent(current.bpPct || 0), formatPercent(average.bp || 0), performanceColor(currentRatios?.bp || 0), performanceColor(averageRatios?.bp || 0)],
+                      ["BT", formatPercent(current.btPct || 0), formatPercent(average.bt || 0), performanceColor(currentRatios?.bt || 0), performanceColor(averageRatios?.bt || 0)],
+                      ["Penetração Skin", formatPercent(current.skinPct || 0), formatPercent(average.skin || 0), performanceColor(currentRatios?.skin || 0), performanceColor(averageRatios?.skin || 0)],
+                      ["Fidelidade - Penetração", formatPercent(current.fidelidadePenetracao || 0), formatPercent(average.fidelidadePenetracao || 0), performanceColor(currentRatios?.fidelidadePenetracao || 0), performanceColor(averageRatios?.fidelidadePenetracao || 0)],
+                      ["Fidelidade - Resgate", formatPercent(current.fidelidadeResgatePct || 0), formatPercent(average.fidelidadeResgate || 0), performanceColor(currentRatios?.fidelidadeResgate || 0), performanceColor(averageRatios?.fidelidadeResgate || 0)],
+                    ].map(([label, mine, avg, mineColor, avgColor]) => (
+                      <div key={label} style={{ background: COLORS.panelAlt, border: `1px solid ${COLORS.border}`, borderRadius: 12, padding: 10, minHeight: 72 }}>
+                        <div style={{ fontSize: 12, color: COLORS.subtext, fontWeight: 700, lineHeight: 1.1 }}>{label}</div>
+                        <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 4, marginTop: 6 }}>
+                          <div style={{ fontWeight: 900, fontSize: 16, color: mineColor, lineHeight: 1.1 }}>{mine}</div>
+                          <div style={{ fontSize: 12, fontWeight: 800, color: avgColor, lineHeight: 1.1 }}>Média {avg}</div>
                         </div>
                       </div>
                     ))}
