@@ -49,6 +49,7 @@ const DETAIL_VIEW_LS_KEY = "bi_service_rateio_detail_view_v1";
 const DRILL_VIEW_LS_KEY = "bi_service_rateio_drill_view_v1";
 const STATUS_VIEW_LS_KEY = "bi_service_rateio_status_view_v1";
 const OUTROS_VIEW_LS_KEY = "bi_service_rateio_outros_view_v1";
+const EXECUTADO_VIEW_LS_KEY = "bi_service_rateio_executado_view_v1";
 
 function Card({ title, children, right = null, className = "", style = undefined }) {
   return (
@@ -1023,23 +1024,31 @@ export default function DashboardRateioUploadInteligentePage() {
   const generatedBudgetMetaForPlano = (plano, empresaFiltro = "Todas", monthKeySet = null) => {
     const match = resolvePlanoMatch(plano, budgetDrePlanos, planoMatchMap);
 
-    if (match?.matched) {
-      const normalized = normalizePlanoBudgetKey(match.matched);
-      const items = budgetEmpresaIndex.get(normalized) || [];
+    if (!match?.matched || match?.mode === "approx") {
+      return { valor: 0, estimado: false, match };
+    }
 
-      let total = 0;
-      for (const item of items) {
-        if (!budgetEmpresaMatchesFilter(item?.empresa, empresaFiltro)) continue;
-        for (const [mes, mm] of Object.entries(item?.months || {})) {
-          const mesNum = String(mes).split("-")[1] || "";
-          if (monthKeySet && !monthKeySet.has(mesNum)) continue;
-          total += Number(mm?.previsto || 0);
+    const normalized = normalizePlanoBudgetKey(match.matched);
+    const items = budgetEmpresaIndex.get(normalized) || [];
+
+    let total = 0;
+    let foundAny = false;
+
+    for (const item of items) {
+      if (!budgetEmpresaMatchesFilter(item?.empresa, empresaFiltro)) continue;
+      for (const [mes, mm] of Object.entries(item?.months || {})) {
+        const mesNum = String(mes).split("-")[1] || "";
+        if (monthKeySet && !monthKeySet.has(mesNum)) continue;
+        const valorMes = typeof mm === "number" ? mm : Number(mm?.previsto ?? mm ?? 0);
+        if (Number.isFinite(valorMes)) {
+          total += valorMes;
+          foundAny = true;
         }
       }
+    }
 
-      if (total > 0) {
-        return { valor: total, estimado: false, match };
-      }
+    if (foundAny) {
+      return { valor: total, estimado: false, match };
     }
 
     return { valor: 0, estimado: false, match };
@@ -1107,6 +1116,11 @@ const sanitizeNumericText = (s) => {
   const [statusModalQuery, setStatusModalQuery] = useState("");
   const [statusStandaloneRows, setStatusStandaloneRows] = useState([]);
   const [standaloneView, setStandaloneView] = useState(() => getStandaloneBootParams().view);
+  const [executadoOpen, setExecutadoOpen] = useState(false);
+  const [executadoQuery, setExecutadoQuery] = useState("");
+  const [executadoEmpresa, setExecutadoEmpresa] = useState("Todas");
+  const [executadoPlano, setExecutadoPlano] = useState("Todos");
+  const [executadoMeses, setExecutadoMeses] = useState([]);
 
   useEffect(() => {
     try {
@@ -1615,6 +1629,14 @@ function openBudgetManager() {
     }
   }
 
+  function openExecutadoView() {
+    setExecutadoEmpresa(fEmpresa || "Todas");
+    setExecutadoPlano("Todos");
+    setExecutadoQuery(busca || "");
+    setExecutadoMeses(Array.isArray(mesesSel) ? [...mesesSel] : []);
+    setExecutadoOpen(true);
+  }
+
   async function processBudgetEmpresaFiles() {
     setBudgetEmpresaLoading(true);
     setBudgetEmpresaError("");
@@ -1953,7 +1975,7 @@ const clearAllBudgets = () => {
 
     let total = 0;
     for (const plano of contasNoFiltro) {
-      total += generatedBudgetValueForPlano(plano, fEmpresa, selectedMonthKeys);
+      total += Math.abs(generatedBudgetValueForPlano(plano, fEmpresa, selectedMonthKeys));
     }
     return total;
   }, [generatedBudgetAvailable, contasNoFiltro, fEmpresa, selectedMonthKeys, budgetEmpresaIndex, budgetDrePlanos, planoMatchMap]);
@@ -1992,7 +2014,7 @@ const clearAllBudgets = () => {
 
   const previstoTotal = useMemo(() => {
     if (generatedBudgetAvailable) return generatedBudgetTotal;
-    return contasNoFiltro.reduce((acc, c) => acc + budgetValueForPlano(c), 0);
+    return contasNoFiltro.reduce((acc, c) => acc + Math.abs(budgetValueForPlano(c)), 0);
   }, [generatedBudgetAvailable, generatedBudgetTotal, contasNoFiltro, budgets, totalGeral]);
 
   const execPct = useMemo(() => (previstoTotal ? (totalGeral / previstoTotal) * 100 : 0), [totalGeral, previstoTotal]);
@@ -2636,6 +2658,200 @@ const outrosPlanos = useMemo(() => {
   }
 
 
+  const executadoSelectedMonthKeys = useMemo(() => {
+    if (!executadoMeses?.length) return null;
+    return new Set(executadoMeses.slice().sort((a, b) => a - b).map((mi) => String(mi + 1).padStart(2, "0")));
+  }, [executadoMeses]);
+
+  const executadoFiltered = useMemo(() => {
+    const q = String(executadoQuery || "").trim().toLowerCase();
+    return rows.filter((r) => {
+      const matchPlano = executadoPlano === "Todos" || r.plano === executadoPlano;
+      const matchEmpresa = executadoEmpresa === "Todas" || r.empresa === executadoEmpresa;
+      const matchBusca =
+        !q ||
+        String(r.plano || "").toLowerCase().includes(q) ||
+        String(r.conta || "").toLowerCase().includes(q) ||
+        String(r.fornecedor || "").toLowerCase().includes(q) ||
+        String(r.empresa || "").toLowerCase().includes(q) ||
+        String(r.status || "").toLowerCase().includes(q);
+
+      let matchMes = true;
+      if (executadoMeses.length > 0) {
+        const mi = mesIndexFromISO(r.data);
+        matchMes = executadoMeses.includes(mi);
+      }
+
+      return matchPlano && matchEmpresa && matchBusca && matchMes;
+    });
+  }, [rows, executadoQuery, executadoPlano, executadoEmpresa, executadoMeses]);
+
+  const executadoContas = useMemo(() => {
+    const s = new Set();
+    for (const r of executadoFiltered) s.add(String(r.plano ?? ""));
+    return Array.from(s).filter(Boolean);
+  }, [executadoFiltered]);
+
+  const executadoRealMapByPlano = useMemo(() => {
+    const map = new Map();
+    for (const r of executadoFiltered) {
+      const plano = String(r.plano ?? "");
+      map.set(plano, (map.get(plano) ?? 0) + (r.valor || 0));
+    }
+    return map;
+  }, [executadoFiltered]);
+
+  const executadoStatusPlanos = useMemo(() => {
+    const arr = [];
+    for (const plano of executadoContas) {
+      const real = executadoRealMapByPlano.get(plano) ?? 0;
+      const budgetMeta = generatedBudgetAvailable
+        ? generatedBudgetMetaForPlano(plano, executadoEmpresa, executadoSelectedMonthKeys)
+        : { valor: budgetValueForPlano(plano), estimado: false, match: null };
+      const previsto = Number(budgetMeta?.valor || 0);
+      const st = budgetStatus(real, previsto);
+      const matchInfo = budgetMeta?.match || planoMatchDiagnostics?.[plano] || { matched: null, confidence: 0, mode: "unmatched" };
+      arr.push({
+        plano,
+        real,
+        previsto,
+        execPct: previsto ? (real / previsto) * 100 : 0,
+        statusKey: st.key,
+        statusLabel: st.label,
+        statusEmoji: st.key === "ok" ? "🟢" : st.key === "warn" ? "🟡" : st.key === "over" ? "🔴" : "⚪",
+        matchMode: matchInfo.mode,
+        matchedPlano: matchInfo.matched || "",
+        matchConfidence: Number(matchInfo.confidence || 0),
+      });
+    }
+    const rank = { over: 0, warn: 1, ok: 2, none: 3 };
+    arr.sort((a, b) => {
+      const ra = rank[a.statusKey] ?? 9;
+      const rb = rank[b.statusKey] ?? 9;
+      if (ra !== rb) return ra - rb;
+      const ea = Number.isFinite(a.execPct) ? a.execPct : 0;
+      const eb = Number.isFinite(b.execPct) ? b.execPct : 0;
+      if (eb !== ea) return eb - ea;
+      return (b.real || 0) - (a.real || 0);
+    });
+    return arr;
+  }, [executadoContas, executadoRealMapByPlano, generatedBudgetAvailable, executadoEmpresa, executadoSelectedMonthKeys, budgetEmpresaIndex, budgetDrePlanos, planoMatchMap, planoMatchDiagnostics, budgets, totalGeral]);
+
+  function exportExecutadoXlsx() {
+    try {
+      const wb = XLSX.utils.book_new();
+      const data = executadoStatusPlanos.map((p) => ({
+        Status: p.statusLabel,
+        Plano: p.plano,
+        "Plano DRE": p.matchedPlano || "",
+        "Tipo match": p.matchMode || "unmatched",
+        "Confiança match": Number(p.matchConfidence || 0),
+        Previsto: Number(p.previsto || 0),
+        Real: Number(p.real || 0),
+        "Execução %": Number(p.execPct || 0),
+      }));
+      const ws = XLSX.utils.json_to_sheet(data);
+      XLSX.utils.book_append_sheet(wb, ws, "Executado");
+      XLSX.writeFile(wb, "executado_status_plano.xlsx");
+    } catch (e) {
+      console.error(e);
+      alert("Não foi possível exportar o XLSX.");
+    }
+  }
+
+  if (executadoOpen) {
+    return (
+      <div className="min-h-screen bg-[#0c1118] text-white">
+        <header className="sticky top-0 z-20 border-b border-white/10 bg-[#0c1118]/90 backdrop-blur px-6 py-4">
+          <div className="max-w-7xl mx-auto flex items-center justify-between gap-3">
+            <div>
+              <div className="text-lg font-semibold text-white/90">Executado</div>
+              <div className="text-[12px] text-white/60">Status, plano, previsto, real e execução usando a base carregada do dashboard</div>
+            </div>
+            <div className="flex items-center gap-2">
+              <button type="button" onClick={exportExecutadoXlsx} className="px-3 py-2 rounded-lg text-sm border bg-white/5 border-white/10 text-white/80 hover:bg-white/10">Exportar XLSX</button>
+              <button type="button" onClick={() => setExecutadoOpen(false)} className="px-3 py-2 rounded-lg text-sm border bg-white/5 border-white/10 text-white/80 hover:bg-white/10">← Voltar</button>
+            </div>
+          </div>
+        </header>
+        <main className="max-w-7xl mx-auto px-6 py-6 space-y-4">
+          <Card title="Filtros">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <div>
+                <div className="text-[11px] text-white/60 mb-1">Empresa</div>
+                <select value={executadoEmpresa} onChange={(e) => setExecutadoEmpresa(e.target.value)} className="w-full rounded-xl bg-[#0b1220] border border-white/10 px-3 py-2.5 text-sm text-white outline-none">
+                  {empresas.map((empresa) => <option key={empresa} value={empresa} className="text-black bg-white">{empresa}</option>)}
+                </select>
+              </div>
+              <div>
+                <div className="text-[11px] text-white/60 mb-1">Plano</div>
+                <select value={executadoPlano} onChange={(e) => setExecutadoPlano(e.target.value)} className="w-full rounded-xl bg-[#0b1220] border border-white/10 px-3 py-2.5 text-sm text-white outline-none">
+                  <option value="Todos" className="text-black bg-white">Todos</option>
+                  {planosSomente.map((plano) => <option key={plano} value={plano}>{plano}</option>)}
+                </select>
+              </div>
+              <div>
+                <div className="text-[11px] text-white/60 mb-1">Busca do plano</div>
+                <input value={executadoQuery} onChange={(e) => setExecutadoQuery(e.target.value)} placeholder="Digite para filtrar..." className="w-full rounded-xl bg-white/5 border border-white/10 px-3 py-2.5 text-sm text-white/80 outline-none focus:border-white/20" />
+              </div>
+            </div>
+            <div className="mt-3">
+              <div className="text-[11px] text-white/60 mb-1">Mês</div>
+              <div className="flex flex-wrap gap-2">
+                {MESES_LABEL.map((label, idx) => {
+                  const active = executadoMeses.includes(idx);
+                  return (
+                    <button key={label} type="button" onClick={() => setExecutadoMeses((prev) => prev.includes(idx) ? prev.filter((m) => m !== idx) : [...prev, idx])} className={`px-3 py-1 rounded-lg text-[11px] border ${active ? "bg-white text-[#0c1118] border-white" : "bg-white/5 text-white/70 border-white/10 hover:bg-white/10"}`}>
+                      {label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </Card>
+
+          <Card title="Tabela executado">
+            <div className="mb-3 text-white/70 text-sm">{executadoStatusPlanos.length} plano(s) encontrados com os filtros atuais</div>
+            <div className="overflow-auto rounded-xl border border-white/10">
+              <table className="min-w-[900px] w-full text-sm">
+                <thead className="bg-white/5 text-white/70">
+                  <tr>
+                    <th className="text-left font-medium px-3 py-2">Status</th>
+                    <th className="text-left font-medium px-3 py-2">Plano</th>
+                    <th className="text-left font-medium px-3 py-2">Plano DRE</th>
+                    <th className="text-left font-medium px-3 py-2">Tipo match</th>
+                    <th className="text-right font-medium px-3 py-2">Previsto</th>
+                    <th className="text-right font-medium px-3 py-2">Real</th>
+                    <th className="text-right font-medium px-3 py-2">Execução</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {executadoStatusPlanos.map((p) => (
+                    <tr key={p.plano} className="border-t border-white/10 hover:bg-white/5">
+                      <td className="px-3 py-2 text-white/80"><span className="mr-2">{p.statusEmoji}</span><span className="text-[12px]">{p.statusLabel}</span></td>
+                      <td className="px-3 py-2 text-white/90">{p.plano}</td>
+                      <td className="px-3 py-2 text-white/70">{p.matchedPlano || "—"}</td>
+                      <td className="px-3 py-2 text-white/70">{p.matchMode || "unmatched"}</td>
+                      <td className="px-3 py-2 text-right text-white/80">{p.previsto || p.previsto === 0 ? fmtBRL(p.previsto) : "—"}</td>
+                      <td className="px-3 py-2 text-right text-white/80">{fmtBRL(p.real)}</td>
+                      <td className="px-3 py-2 text-right">{p.previsto ? <span className={`${p.execPct > 100 ? "text-rose-200" : p.execPct >= 90 ? "text-amber-200" : "text-emerald-200"} font-medium`}>{p.execPct.toFixed(1)}%</span> : <span className="text-white/50">—</span>}</td>
+                    </tr>
+                  ))}
+                  {!executadoStatusPlanos.length && (
+                    <tr className="border-t border-white/10">
+                      <td colSpan={7} className="px-3 py-6 text-center text-white/50">Nenhum plano encontrado com os filtros atuais.</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+        </main>
+      </div>
+    );
+  }
+
+
   if (standaloneView === "status") {
     return (
       <div className="min-h-screen bg-[#0c1118] text-white">
@@ -3053,7 +3269,7 @@ const outrosPlanos = useMemo(() => {
                     value={budgetQuery}
                     onChange={(e) => setBudgetQuery(e.target.value)}
                     placeholder="Buscar plano..."
-                    className="w-full rounded-lg px-3 py-2 bg-white/5 border border-white/10 text-white placeholder:text-white/40 outline-none focus:ring-2 focus:ring-sky-500/40 text-sm"
+                    className="w-full rounded-lg px-3 py-2 bg-[#0B1220] border border-white/20 text-white placeholder:text-white/40 outline-none focus:ring-2 focus:ring-sky-500/40 text-sm"
                   />
                 </div>
                 <div className="w-full md:w-52">
@@ -3061,11 +3277,11 @@ const outrosPlanos = useMemo(() => {
                   <select
                     value={budgetEmpresaFilter}
                     onChange={(e) => setBudgetEmpresaFilter(e.target.value)}
-                    className="w-full rounded-lg px-3 py-2 bg-white/5 border border-white/10 text-white outline-none focus:ring-2 focus:ring-sky-500/40 text-sm"
+                    className="w-full rounded-lg px-3 py-2 bg-[#0B1220] border border-white/20 text-white outline-none focus:ring-2 focus:ring-sky-500/40 text-sm"
                   >
-                    <option value="Todas">Todas</option>
+                    <option value="Todas" className="text-black bg-white">Todas</option>
                     {budgetEmpresaCompaniesVisible.map((empresa) => (
-                      <option key={empresa} value={empresa}>{empresa}</option>
+                      <option key={empresa} value={empresa} className="text-black bg-white">{empresa}</option>
                     ))}
                   </select>
                 </div>
@@ -3074,11 +3290,11 @@ const outrosPlanos = useMemo(() => {
                   <select
                     value={budgetMesFilter}
                     onChange={(e) => setBudgetMesFilter(e.target.value)}
-                    className="w-full rounded-lg px-3 py-2 bg-white/5 border border-white/10 text-white outline-none focus:ring-2 focus:ring-sky-500/40 text-sm"
+                    className="w-full rounded-lg px-3 py-2 bg-[#0B1220] border border-white/20 text-white outline-none focus:ring-2 focus:ring-sky-500/40 text-sm"
                   >
-                    <option value="Todos">Todos</option>
+                    <option value="Todos" className="text-black bg-white">Todos</option>
                     {budgetEmpresaMonths.map((mes) => (
-                      <option key={mes} value={mes}>{mes}</option>
+                      <option key={mes} value={mes} className="text-black bg-white">{mes}</option>
                     ))}
                   </select>
                 </div>
@@ -3229,6 +3445,15 @@ const outrosPlanos = useMemo(() => {
               >
                 Orçamentos
               </button>
+              <button
+                type="button"
+                onClick={() => openExecutadoView()}
+                className="px-2.5 py-1 rounded-lg text-[11px] border border-white/10 bg-white/5 text-white/80 hover:bg-white/10"
+                disabled={!rows.length}
+                style={{ colorScheme: "dark" }}
+              >
+                Executado
+              </button>
             </div>
           }
         >
@@ -3277,7 +3502,7 @@ const outrosPlanos = useMemo(() => {
                 >
                   {planos.map((p) => {
                     const st = p !== "Todos" ? planoStatusMap?.[p] : null;
-                    const label = p === "Todos" ? "Todos" : `${st?.emoji ?? "⚪"} ${p}`;
+                    const label = p === "Todos" ? "Todos" : p;
                     return (
                       <option key={p} value={p} className="text-black bg-white">
                         {label}
