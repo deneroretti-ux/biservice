@@ -1231,17 +1231,19 @@ const handleFiles = useCallback(async (fileList) => {
         scorePct: Math.min(((total.score / count) / 1.1) * 100, 100),
         metas: {
           ...total.metas,
-          // Receita é meta total. As demais metas percentuais/médias são média do filtro.
-          ticketMedio: total.metas.ticketMedio / count,
-          itensPorBoleto: total.metas.itensPorBoleto / count,
-          conversao: total.metas.conversao / count,
-          b1: total.metas.b1 / count,
-          bp: total.metas.bp / count,
-          bt: total.metas.bt / count,
-          skin: total.metas.skin / count,
-          fidelidadePenetracao: total.metas.fidelidadePenetracao / count,
-          fidelidadeResgate: total.metas.fidelidadeResgate / count,
-          treinamento: total.metas.treinamento / count,
+          // Receita continua como meta total do filtro.
+          // As demais metas ficam FIXAS: pega a primeira meta válida encontrada no filtro,
+          // evitando que a meta mude por média ou por consultores sem meta.
+          ticketMedio: filtered.find((i) => i.metas?.ticketMedio > 0)?.metas?.ticketMedio || 0,
+          itensPorBoleto: filtered.find((i) => i.metas?.itensPorBoleto > 0)?.metas?.itensPorBoleto || 0,
+          conversao: filtered.find((i) => i.metas?.conversao > 0)?.metas?.conversao || 0,
+          b1: filtered.find((i) => i.metas?.b1 > 0)?.metas?.b1 || 0,
+          bp: filtered.find((i) => i.metas?.bp > 0)?.metas?.bp || 0,
+          bt: filtered.find((i) => i.metas?.bt > 0)?.metas?.bt || 0,
+          skin: filtered.find((i) => i.metas?.skin > 0)?.metas?.skin || 0,
+          fidelidadePenetracao: filtered.find((i) => i.metas?.fidelidadePenetracao > 0)?.metas?.fidelidadePenetracao || 0,
+          fidelidadeResgate: filtered.find((i) => i.metas?.fidelidadeResgate > 0)?.metas?.fidelidadeResgate || 0,
+          treinamento: filtered.find((i) => i.metas?.treinamento > 0)?.metas?.treinamento || 0,
         },
       };
     }
@@ -1530,8 +1532,8 @@ const handleFiles = useCallback(async (fileList) => {
             </div>
           </div>
 
-          <Card style={{ padding: "clamp(5px, 0.6vw, 8px)", width: "min(470px, 100%)", minWidth: "min(360px, 100%)", minHeight: 48, flexShrink: 1 }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6, marginBottom: 4 }}>
+          <Card style={{ padding: "clamp(4px, 0.4vw, 6px)", width: "min(470px, 100%)", minWidth: "min(340px, 100%)", minHeight: 38, flexShrink: 1 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 4, marginBottom: 2 }}>
               <div style={{ fontSize: 10, fontWeight: 700, color: COLORS.subtext }}>Importar planilhas/pasta</div>
               <div style={{ display: "flex", gap: 6, flexWrap: "nowrap", justifyContent: "flex-end" }}>
                 <button
@@ -1589,8 +1591,8 @@ const handleFiles = useCallback(async (fileList) => {
                 border: `1px dashed ${isDragging ? COLORS.blue : COLORS.border}`,
                 background: isDragging ? "#eef4ff" : COLORS.panelAlt,
                 borderRadius: 10,
-                minHeight: 30,
-                padding: "4px 8px",
+                minHeight: 24,
+                padding: "2px 6px",
                 textAlign: "center",
                 display: "flex",
                 alignItems: "center",
@@ -1601,7 +1603,7 @@ const handleFiles = useCallback(async (fileList) => {
                 userSelect: "none",
               }}
             >
-              <Upload size={13} color={isDragging ? COLORS.blue : COLORS.orange} />
+              <Upload size={11} color={isDragging ? COLORS.blue : COLORS.orange} />
               <div style={{ fontSize: 10, fontWeight: 800, color: COLORS.text, pointerEvents: "none" }}>
                 {isProcessing ? "Processando..." : isDragging ? "Solte aqui" : "Selecionar ou arrastar .xlsx"}
               </div>
@@ -1619,13 +1621,13 @@ const handleFiles = useCallback(async (fileList) => {
 
             {!!filesLoaded.length && (
               <div style={{ marginTop: 4, display: "flex", gap: 5, flexWrap: "wrap" }}>
-                <span style={{ background: COLORS.orangeSoft, color: COLORS.text, border: `1px solid rgba(34,197,94,0.25)`, padding: "3px 6px", borderRadius: 999, fontSize: 9, fontWeight: 700 }}>
+                <span style={{ background: COLORS.orangeSoft, color: COLORS.text, border: `1px solid rgba(34,197,94,0.25)`, padding: "2px 5px", borderRadius: 999, fontSize: 8, fontWeight: 700 }}>
                   📁 {filesLoaded.length}
                 </span>
-                <span style={{ background: COLORS.panelAlt, color: COLORS.text, border: `1px solid ${COLORS.border}`, padding: "3px 6px", borderRadius: 999, fontSize: 9, fontWeight: 700 }}>
+                <span style={{ background: COLORS.panelAlt, color: COLORS.text, border: `1px solid ${COLORS.border}`, padding: "2px 5px", borderRadius: 999, fontSize: 8, fontWeight: 700 }}>
                   🧾 {baseMetas.length}
                 </span>
-                <span style={{ background: "rgba(34,197,94,0.12)", color: COLORS.text, border: `1px solid rgba(34,197,94,0.25)`, padding: "3px 6px", borderRadius: 999, fontSize: 9, fontWeight: 700 }}>
+                <span style={{ background: "rgba(34,197,94,0.12)", color: COLORS.text, border: `1px solid rgba(34,197,94,0.25)`, padding: "2px 5px", borderRadius: 999, fontSize: 8, fontWeight: 700 }}>
                   📊 {relatorioRows.length}
                 </span>
               </div>
