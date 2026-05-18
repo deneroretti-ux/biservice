@@ -4,13 +4,10 @@ import type { NextRequest } from 'next/server';
 
 /**
  * Regras:
- * - /dashboard e /area/* exigem estar logado (cookie "token")
+ * - Dashboards, uploads, área interna, planejamento e rotas /boti exigem estar logado
+ * - Usa cookie "token" salvo no login
  * - /login redireciona para /dashboard se já estiver logado
- * - Demais rotas passam direto
- *
- * Observação:
- * O backend (rotas /api/...) já valida com requireAuth, então
- * não bloqueamos /api/ aqui para evitar quebrar chamadas públicas.
+ * - APIs não são bloqueadas aqui para não quebrar chamadas públicas
  */
 export function middleware(req: NextRequest) {
   const token = req.cookies.get('token')?.value || '';
@@ -18,7 +15,15 @@ export function middleware(req: NextRequest) {
 
   const isProtected =
     pathname.startsWith('/dashboard') ||
-    pathname.startsWith('/area');
+    pathname.startsWith('/dashboard-rateio') ||
+    pathname.startsWith('/dashboard-consultor') ||
+    pathname.startsWith('/dashboard-orcamento') ||
+    pathname.startsWith('/dashboard-agricola-limao') ||
+    pathname.startsWith('/dashboard-estoque') ||
+    pathname.startsWith('/planejamento') ||
+    pathname.startsWith('/upload') ||
+    pathname.startsWith('/area') ||
+    pathname.startsWith('/boti');
 
   // bloquear rotas protegidas sem token
   if (isProtected && !token) {
@@ -37,9 +42,20 @@ export function middleware(req: NextRequest) {
 
 /**
  * O matcher define quais rotas passam pelo middleware.
- * - Protegemos /dashboard/* e /area/* e também observamos /login para redirecionar quando já logado.
- * - NÃO incluímos /api para não interferir nas APIs (o backend já valida via requireAuth).
+ * Não incluímos /api para não interferir nas APIs.
  */
 export const config = {
-  matcher: ['/dashboard/:path*', '/area/:path*', '/login'],
+  matcher: [
+    '/dashboard/:path*',
+    '/dashboard-rateio/:path*',
+    '/dashboard-consultor/:path*',
+    '/dashboard-orcamento/:path*',
+    '/dashboard-agricola-limao/:path*',
+    '/dashboard-estoque/:path*',
+    '/planejamento/:path*',
+    '/upload/:path*',
+    '/area/:path*',
+    '/boti/:path*',
+    '/login',
+  ],
 };
