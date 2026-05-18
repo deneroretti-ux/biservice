@@ -35,10 +35,6 @@ const C_AMBER = "#f59e0b";
 const C_ROSE = "#ef4444";
 const C_PURPLE = "#7c3aed";
 const C_CYAN = "#06b6d4";
-<<<<<<< HEAD
-=======
-const C_VIOLET = "#8b5cf6"; // violet-500
->>>>>>> dcd52f4 (atualiza projeto com supabase)
 const C_CARD_BORDER = "rgba(255,255,255,0.10)";
 const C_CARD_BG = "rgba(255,255,255,0.03)";
 const PIE_COLORS = [C_BLUE, C_GREEN, C_AMBER, C_ROSE, C_PURPLE, C_CYAN];
@@ -76,162 +72,7 @@ function toNumberBR(v) {
 
 /** Parse do DRE (coluna B descrição, coluna C valor) */
 function parseDRE_AOA(aoa) {
-<<<<<<< HEAD
   const rows = (aoa || [])
-=======
-  // Suporta DREs "simples" (colunas B/C) e DREs detalhados (modelo VD: Descrição + anos)
-  const grid = (aoa || []).map((r) => (Array.isArray(r) ? r : []));
-
-  // 1) Detecta header do modelo detalhado (linha com "Descrição" e algum ano 20xx)
-  let headerRow = -1;
-  let yearCols = []; // [{year, col}]
-  for (let i = 0; i < Math.min(grid.length, 50); i++) {
-    const row = grid[i] || [];
-    const hasDesc = normalize(row?.[0]).includes("descricao") || normalize(row?.[1]).includes("descricao");
-    const cols = [];
-    for (let c = 0; c < row.length; c++) {
-      const v = row[c];
-      const s = String(v ?? "").trim();
-      if (/^20\d{2}$/.test(s)) cols.push({ year: Number(s), col: c });
-      if (typeof v === "number" && v >= 2000 && v <= 2099) cols.push({ year: Number(v), col: c });
-    }
-    if (hasDesc && cols.length) {
-      headerRow = i;
-      // remove duplicados por col/ano
-      const uniq = new Map();
-      cols.forEach((x) => uniq.set(x.col, x));
-      yearCols = Array.from(uniq.values()).sort((a, b) => a.year - b.year);
-      break;
-    }
-  }
-
-  // 2) Se achou header detalhado, parseia por ano + hierarquia por seção
-  if (headerRow >= 0 && yearCols.length) {
-    const years = yearCols.map((y) => y.year);
-    const yearCurrent = Math.max(...years);
-    const yearCol = yearCols.find((y) => y.year === yearCurrent)?.col ?? yearCols[yearCols.length - 1].col;
-
-    const outRows = [];
-    for (let i = headerRow + 1; i < grid.length; i++) {
-      const r = grid[i] || [];
-      const rawDesc = r?.[0];
-      if (rawDesc == null || String(rawDesc).trim() === "") continue;
-
-      const desc = String(rawDesc);
-      const v = r?.[yearCol];
-      const val = typeof v === "number" ? v : toNumberBR(v);
-
-      outRows.push({ desc, val });
-    }
-
-    const isSubtotalLine = (t) => String(t || "").trim().startsWith("=");
-    const indentLevel = (t) => {
-      const s = String(t || "");
-      const m = s.match(/^\s+/);
-      return m ? m[0].length : 0;
-    };
-    const cleanName = (t) => String(t || "").replace(/^\s+/, "").trim();
-
-    // seções relevantes e mapping p/ labels da UI
-    const sectionToGroup = (sec) => {
-      const n = normalize(sec);
-      if (n.includes("administr")) return "Adm";
-      if (n.includes("vendas")) return "Vendas";
-      if (n.includes("financeir")) return "Financeiro";
-      if (n.includes("outras despesas operacionais")) return "Outras";
-      return null;
-    };
-
-    const sections = {};
-    const itemsAll = [];
-    let currentSection = null;
-
-    // pega totais de seções (no modelo VD, o header da seção já vem com valor na coluna do ano)
-    for (let i = 0; i < outRows.length; i++) {
-      const d0 = outRows[i].desc;
-      const d = cleanName(d0);
-      const ind = indentLevel(d0);
-
-      if (!d) continue;
-
-      const maybeSection =
-        ind === 0 &&
-        !isSubtotalLine(d) &&
-        !d.toLowerCase().startsWith("(-)") &&
-        !d.toLowerCase().startsWith(")") &&
-        !d.toLowerCase().startsWith("(") &&
-        !d.toLowerCase().startsWith("-");
-
-      if (maybeSection) {
-        currentSection = d;
-        if (!sections[currentSection]) sections[currentSection] = { total: outRows[i].val || 0, items: [] };
-        else sections[currentSection].total = outRows[i].val || sections[currentSection].total || 0;
-        continue;
-      }
-
-      // itens (linhas indentadas ou linhas com "(-)" etc.)
-      if (currentSection) {
-        const it = {
-          section: currentSection,
-          grupo: sectionToGroup(currentSection),
-          name: d,
-          value: outRows[i].val || 0,
-        };
-        sections[currentSection].items.push(it);
-        itemsAll.push(it);
-      }
-    }
-
-    const readLineValue = (needle) => {
-      const n = normalize(needle);
-      const hit = outRows.find((r) => normalize(cleanName(r.desc)).includes(n));
-      return hit ? (hit.val || 0) : null;
-    };
-
-    const ytd = {
-      receitaBruta: readLineValue("receitas brutas") ?? 0,
-      deducoes: readLineValue("deducoes") ?? 0,
-      receitaLiquida: readLineValue("receita liquida") ?? 0,
-      cmv: readLineValue("custos") ?? 0,
-      lucroBruto: readLineValue("lucro bruto") ?? 0,
-      despAdm: readLineValue("despesas administrativas") ?? 0,
-      despVendas: readLineValue("despesas com vendas") ?? readLineValue("despesas vendas") ?? 0,
-      despFin: readLineValue("despesas financeiras") ?? 0,
-      outrasDespOp: readLineValue("outras despesas operacionais") ?? 0,
-      recFin: readLineValue("receitas financeiras") ?? 0,
-      outrasRecOp: readLineValue("outras receitas operacionais") ?? 0,
-      lucroOperacional: readLineValue("lucro operacional") ?? 0,
-      lucroLiquido: readLineValue("lucro liquido") ?? readLineValue("lucro líquido") ?? 0,
-    };
-
-    // fallback se alguns subtotais vierem zerados
-    if (!ytd.receitaLiquida) ytd.receitaLiquida = (ytd.receitaBruta || 0) + (ytd.deducoes || 0);
-    if (!ytd.lucroBruto) ytd.lucroBruto = (ytd.receitaLiquida || 0) + (ytd.cmv || 0);
-    if (!ytd.lucroOperacional) {
-      ytd.lucroOperacional =
-        (ytd.lucroBruto || 0) +
-        (ytd.despAdm || 0) +
-        (ytd.despVendas || 0) +
-        (ytd.despFin || 0) +
-        (ytd.outrasDespOp || 0) +
-        (ytd.recFin || 0) +
-        (ytd.outrasRecOp || 0);
-    }
-    if (!ytd.lucroLiquido) ytd.lucroLiquido = ytd.lucroOperacional;
-
-    return {
-      kind: "vd_detalhado",
-      years,
-      yearCurrent,
-      ytd,
-      sections,
-      itemsAll,
-    };
-  }
-
-  // 3) Fallback: modelo simples B/C (como estava antes)
-  const rows = (grid || [])
->>>>>>> dcd52f4 (atualiza projeto com supabase)
     .map((r) => ({ desc: r?.[1], val: r?.[2] }))
     .filter((r) => r.desc != null || r.val != null);
 
@@ -324,10 +165,6 @@ function parseDRE_AOA(aoa) {
   const lucroLiquido = lucroLiqSub ?? lucroOperacional;
 
   return {
-<<<<<<< HEAD
-=======
-    kind: "simples",
->>>>>>> dcd52f4 (atualiza projeto com supabase)
     ytd: {
       receitaBruta,
       deducoes,
@@ -346,10 +183,6 @@ function parseDRE_AOA(aoa) {
   };
 }
 
-<<<<<<< HEAD
-=======
-
->>>>>>> dcd52f4 (atualiza projeto com supabase)
 /* ===== UI ===== */
 function Card({ title, children, right = null }) {
   return (
@@ -502,11 +335,7 @@ export default function DashboardOrcamentoExecutivo() {
       const parsed = parseDRE_AOA(aoa);
 
       const sanity = Math.abs(parsed?.ytd?.receitaLiquida || 0) + Math.abs(parsed?.ytd?.receitaBruta || 0);
-<<<<<<< HEAD
       if (!sanity) throw new Error("DRE sem valores detectáveis (confere colunas B/C).");
-=======
-      if (!sanity) throw new Error("DRE sem valores detectáveis (confere o modelo/colunas do arquivo).");
->>>>>>> dcd52f4 (atualiza projeto com supabase)
 
       setDreParsed(parsed);
       setProgress(100);
@@ -605,39 +434,9 @@ export default function DashboardOrcamentoExecutivo() {
   }, [dreParsed, mesesYTD, crescimentoReceita, ajusteDespesas, metaMargemBruta]);
 
   const ranking = useMemo(() => {
-<<<<<<< HEAD
     const arr = [...(model.despesas || [])];
     return arr.sort((a, b) => b.real - a.real).slice(0, 10);
   }, [model.despesas]);
-=======
-    // Se o DRE veio no modelo detalhado (VD), fazemos ranking real por ITEM (conta)
-    if (dreParsed?.itemsAll?.length) {
-      const groupOf = (sec) => {
-        const n = normalize(sec);
-        if (n.includes("administr")) return "Adm";
-        if (n.includes("vendas")) return "Vendas";
-        if (n.includes("financeir")) return "Financeiro";
-        if (n.includes("outras despesas operacionais")) return "Outras";
-        return null;
-      };
-
-      const items = (dreParsed.itemsAll || [])
-        .map((it) => ({
-          grupo: it.grupo || groupOf(it.section) || "Outras",
-          name: it.name,
-          real: Math.abs(Number(it.value || 0)),
-          signed: Number(it.value || 0),
-        }))
-        .filter((d) => d.real > 0 && d.signed < 0); // só gastos
-
-      return items.sort((a, b) => b.real - a.real).slice(0, 10);
-    }
-
-    // fallback: ranking por grupos (demo / modelo simples)
-    const arr = [...(model.despesas || [])];
-    return arr.sort((a, b) => b.real - a.real).slice(0, 10);
-  }, [dreParsed, model.despesas]);
->>>>>>> dcd52f4 (atualiza projeto com supabase)
 
   const filtered = useMemo(() => {
     if (!selectedGroup) {
@@ -663,40 +462,6 @@ export default function DashboardOrcamentoExecutivo() {
     };
   }, [model, ranking, selectedGroup]);
 
-<<<<<<< HEAD
-=======
-  const detailItems = useMemo(() => {
-    if (dreParsed?.kind !== "vd_detalhado") return [];
-    if (!selectedGroup) return [];
-
-    const groupToSectionNeedle = {
-      Adm: "despesas administrativas",
-      Vendas: "despesas com vendas",
-      Financeiro: "despesas financeiras",
-      Outras: "outras despesas operacionais",
-    };
-
-    const needle = groupToSectionNeedle[selectedGroup];
-    if (!needle) return [];
-
-    const secName = Object.keys(dreParsed.sections || {}).find((k) =>
-      normalize(k).includes(needle)
-    );
-    if (!secName) return [];
-
-    const items = (dreParsed.sections?.[secName]?.items || [])
-      .map((it) => ({
-        name: it.name,
-        real: Math.abs(Number(it.value || 0)),
-        signed: Number(it.value || 0),
-      }))
-      .filter((d) => d.real > 0 && d.signed < 0);
-
-    return items.sort((a, b) => b.real - a.real).slice(0, 15);
-  }, [dreParsed, selectedGroup]);
-
-
->>>>>>> dcd52f4 (atualiza projeto com supabase)
 
   return (
     <div className="min-h-screen bg-[#0c1118] text-white">
@@ -935,76 +700,7 @@ export default function DashboardOrcamentoExecutivo() {
         </div>
 
 
-<<<<<<< HEAD
       </main>
-=======
-      
-        {/* Detalhamento por conta (quando o DRE é do modelo VD detalhado) */}
-        {dreParsed?.kind === "vd_detalhado" && selectedGroup && (
-          <div style={{ marginTop: 10 }}>
-            <Card title={`Detalhamento — ${selectedGroup} (Top 15 contas)`}>
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "1.2fr 0.8fr",
-                  gap: "0.5rem",
-                  alignItems: "start",
-                }}
-              >
-                <div style={{ height: 290 }}>
-                  <ResponsiveContainer>
-                    <BarChart data={detailItems} layout="vertical">
-                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.12)" />
-                      <XAxis type="number" stroke="rgba(255,255,255,0.7)" tickFormatter={(v) => fmtBRL(v)} />
-                      <YAxis type="category" dataKey="name" width={190} stroke="rgba(255,255,255,0.7)" />
-                      <Tooltip formatter={(v) => fmtBRL(v)} contentStyle={{ background: "#0f172a", border: "1px solid rgba(255,255,255,0.12)" }} labelStyle={{ color: "white" }} />
-                      <Bar dataKey="real" name="Gasto (R$)" fill={C_VIOLET} />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-
-                <div
-                  className="no-scrollbar"
-                  style={{
-                    maxHeight: 290,
-                    overflow: "auto",
-                    border: "1px solid rgba(255,255,255,0.12)",
-                    borderRadius: 12,
-                  }}
-                >
-                  <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                    <thead>
-                      <tr style={{ position: "sticky", top: 0, background: "#0f172a" }}>
-                        <th style={{ textAlign: "left", padding: "10px 12px", fontSize: 12, opacity: 0.9 }}>Conta</th>
-                        <th style={{ textAlign: "right", padding: "10px 12px", fontSize: 12, opacity: 0.9 }}>Valor</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {(detailItems || []).map((r, i) => (
-                        <tr key={i} style={{ borderTop: "1px solid rgba(255,255,255,0.08)" }}>
-                          <td style={{ padding: "10px 12px", fontSize: 12, opacity: 0.95 }}>{r.name}</td>
-                          <td style={{ padding: "10px 12px", fontSize: 12, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
-                            {fmtBRL(r.real)}
-                          </td>
-                        </tr>
-                      ))}
-                      {(!detailItems || !detailItems.length) && (
-                        <tr>
-                          <td colSpan={2} style={{ padding: "12px", opacity: 0.8, fontSize: 12 }}>
-                            Nenhum detalhamento encontrado para este grupo (confere se o DRE tem linhas abaixo do header).
-                          </td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            </Card>
-          </div>
-        )}
-
-</main>
->>>>>>> dcd52f4 (atualiza projeto com supabase)
     </div>
   );
 }

@@ -714,21 +714,13 @@ function MetricCard({ title, value, subtitle, gaugeColor = COLORS.orange, percen
   const Icon = icon;
   const safe = Math.max(0, Math.min(100, percent || 0));
   return (
-<<<<<<< HEAD
     <Card style={{ padding: 6 }}>
-=======
-    <Card style={{ padding: 6, border: `1px solid ${gaugeColor}33`, boxShadow: `0 0 14px ${gaugeColor}1f` }}>
->>>>>>> dcd52f4 (atualiza projeto com supabase)
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8, gap: 8 }}>
         <div style={{ fontSize: 10, fontWeight: 800, color: COLORS.text, lineHeight: 1.05 }}>{title}</div>
         {Icon ? <Icon size={13} color={COLORS.subtext} /> : null}
       </div>
       <div style={{ fontSize: 11, color: COLORS.subtext, marginBottom: 3, fontWeight: 700 }}>{value}</div>
-<<<<<<< HEAD
       <div style={{ height: 5, background: "rgba(255,255,255,0.08)", borderRadius: 999, overflow: "hidden" }}>
-=======
-      <div style={{ height: 5, background: "rgba(255,255,255,0.08)", borderRadius: 999, backdropFilter: "blur(6px)", overflow: "hidden" }}>
->>>>>>> dcd52f4 (atualiza projeto com supabase)
         <div style={{ width: `${safe}%`, height: "100%", background: gaugeColor, borderRadius: 999 }} />
       </div>
       <div style={{ marginTop: 3, fontSize: 9, color: COLORS.subtext, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{subtitle}</div>
@@ -784,11 +776,7 @@ function RankingTooltip({ active, payload, label, metricTab }) {
       border: `1px solid ${COLORS.border}`,
       borderRadius: 12,
       padding: 10,
-<<<<<<< HEAD
       boxShadow: "0 8px 24px rgba(0,0,0,0.28)",
-=======
-      boxShadow: "0 10px 30px rgba(0,0,0,0.42)", backdropFilter: "blur(8px)",
->>>>>>> dcd52f4 (atualiza projeto com supabase)
       minWidth: 190
     }}>
       <div style={{ fontSize: 13, fontWeight: 900, color: COLORS.text, marginBottom: 6 }}>{label}</div>
@@ -1558,11 +1546,7 @@ const handleFiles = useCallback(async (fileList) => {
                     border: `1px solid ${baseMetas.length ? COLORS.blue : COLORS.border}`,
                     background: baseMetas.length ? COLORS.blue : COLORS.panelAlt,
                     color: baseMetas.length ? "#fff" : COLORS.subtext,
-<<<<<<< HEAD
                     borderRadius: 999,
-=======
-                    borderRadius: 999, backdropFilter: "blur(6px)",
->>>>>>> dcd52f4 (atualiza projeto com supabase)
                     padding: "4px 7px",
                     fontSize: 10,
                     fontWeight: 800,
@@ -1583,11 +1567,7 @@ const handleFiles = useCallback(async (fileList) => {
                     border: `1px solid ${relatorioRows.length ? COLORS.green : COLORS.border}`,
                     background: relatorioRows.length ? COLORS.green : COLORS.panelAlt,
                     color: relatorioRows.length ? "#fff" : COLORS.subtext,
-<<<<<<< HEAD
                     borderRadius: 999,
-=======
-                    borderRadius: 999, backdropFilter: "blur(6px)",
->>>>>>> dcd52f4 (atualiza projeto com supabase)
                     padding: "4px 7px",
                     fontSize: 10,
                     fontWeight: 800,
@@ -1641,7 +1621,6 @@ const handleFiles = useCallback(async (fileList) => {
 
             {!!filesLoaded.length && (
               <div style={{ marginTop: 4, display: "flex", gap: 5, flexWrap: "wrap" }}>
-<<<<<<< HEAD
                 <span style={{ background: COLORS.orangeSoft, color: COLORS.text, border: `1px solid rgba(34,197,94,0.25)`, padding: "2px 5px", borderRadius: 999, fontSize: 8, fontWeight: 700 }}>
                   📁 {filesLoaded.length}
                 </span>
@@ -1649,15 +1628,6 @@ const handleFiles = useCallback(async (fileList) => {
                   🧾 {baseMetas.length}
                 </span>
                 <span style={{ background: "rgba(34,197,94,0.12)", color: COLORS.text, border: `1px solid rgba(34,197,94,0.25)`, padding: "2px 5px", borderRadius: 999, fontSize: 8, fontWeight: 700 }}>
-=======
-                <span style={{ background: COLORS.orangeSoft, color: COLORS.text, border: `1px solid rgba(34,197,94,0.25)`, padding: "2px 5px", borderRadius: 999, backdropFilter: "blur(6px)", fontSize: 8, fontWeight: 700 }}>
-                  📁 {filesLoaded.length}
-                </span>
-                <span style={{ background: COLORS.panelAlt, color: COLORS.text, border: `1px solid ${COLORS.border}`, padding: "2px 5px", borderRadius: 999, backdropFilter: "blur(6px)", fontSize: 8, fontWeight: 700 }}>
-                  🧾 {baseMetas.length}
-                </span>
-                <span style={{ background: "rgba(34,197,94,0.12)", color: COLORS.text, border: `1px solid rgba(34,197,94,0.25)`, padding: "2px 5px", borderRadius: 999, backdropFilter: "blur(6px)", fontSize: 8, fontWeight: 700 }}>
->>>>>>> dcd52f4 (atualiza projeto com supabase)
                   📊 {relatorioRows.length}
                 </span>
               </div>
@@ -1690,13 +1660,8 @@ const handleFiles = useCallback(async (fileList) => {
               <MetricCard title="Boleto Médio" value={formatCurrency(current.ticketMedio)} subtitle={current.metas?.ticketMedio ? `Meta: ${formatCurrency(current.metas.ticketMedio)}` : `Preço médio: ${formatCurrency(current.precoMedio)}`} percent={current.metas?.ticketMedio ? Math.min((current.ticketMedio / current.metas.ticketMedio) * 100, 100) : (current.ticketMedio / 140) * 100} gaugeColor={performanceColor(currentRatios?.boletoMedio || 0)} icon={Store} />
               <MetricCard title="Itens/Boleto" value={formatNumber(current.itensPorBoleto, 2)} subtitle={current.metas?.itensPorBoleto ? `Meta: ${formatNumber(current.metas.itensPorBoleto, 2)}` : `Itens: ${formatNumber(current.itens)}`} percent={current.metas?.itensPorBoleto ? Math.min((current.itensPorBoleto / current.metas.itensPorBoleto) * 100, 100) : (current.itensPorBoleto / 2.2) * 100} gaugeColor={performanceColor(currentRatios?.itensPorBoleto || 0)} icon={Users} />
               <MetricCard title="Penetração Skin" value={formatPercent(current.skinPct || 0)} subtitle={`Meta: ${formatPercent(current?.metas?.skin || 0)}`} percent={current.metas?.skin ? Math.min(((current.skinPct || 0) / current.metas.skin) * 100, 100) : (current.skinPct || 0) * 500} gaugeColor={performanceColor(currentRatios?.skin || 0)} icon={Award} />
-<<<<<<< HEAD
               <MetricCard title="Fidelidade - Penetração" value={formatPercent(current.fidelidadePenetracao || 0)} subtitle={current.metas?.fidelidadePenetracao ? `Meta: ${formatPercent(current.metas.fidelidadePenetracao)}` : "Desafio fidelidade"} percent={current.metas?.fidelidadePenetracao ? Math.min(((current.fidelidadePenetracao || 0) / current.metas.fidelidadePenetracao) * 100, 100) : (current.fidelidadePenetracao || 0) * 500} gaugeColor={performanceColor(currentRatios?.fidelidadePenetracao || 0)} icon={Award} />
               <MetricCard title="Fidelidade - Resgate" value={formatPercent(current.fidelidadeResgatePct || 0)} subtitle={current.metas?.fidelidadeResgate ? `Meta: ${formatPercent(current.metas.fidelidadeResgate)}` : "Uso de benefícios"} percent={current.metas?.fidelidadeResgate ? Math.min(((current.fidelidadeResgatePct || 0) / current.metas.fidelidadeResgate) * 100, 100) : (current.fidelidadeResgatePct || 0) * 500} gaugeColor={performanceColor(currentRatios?.fidelidadeResgate || 0)} icon={Award} />
-=======
-              <MetricCard title="Fidelidade Pen." value={formatPercent(current.fidelidadePenetracao || 0)} subtitle={current.metas?.fidelidadePenetracao ? `Meta: ${formatPercent(current.metas.fidelidadePenetracao)}` : "Desafio fidelidade"} percent={current.metas?.fidelidadePenetracao ? Math.min(((current.fidelidadePenetracao || 0) / current.metas.fidelidadePenetracao) * 100, 100) : (current.fidelidadePenetracao || 0) * 500} gaugeColor={performanceColor(currentRatios?.fidelidadePenetracao || 0)} icon={Award} />
-              <MetricCard title="Fidelidade Resg." value={formatPercent(current.fidelidadeResgatePct || 0)} subtitle={current.metas?.fidelidadeResgate ? `Meta: ${formatPercent(current.metas.fidelidadeResgate)}` : "Uso de benefícios"} percent={current.metas?.fidelidadeResgate ? Math.min(((current.fidelidadeResgatePct || 0) / current.metas.fidelidadeResgate) * 100, 100) : (current.fidelidadeResgatePct || 0) * 500} gaugeColor={performanceColor(currentRatios?.fidelidadeResgate || 0)} icon={Award} />
->>>>>>> dcd52f4 (atualiza projeto com supabase)
               <MetricCard title="Treinamento" value={formatPercent(current.treinamento || 0)} subtitle={current.metas?.treinamento ? `Meta: ${formatPercent(current.metas.treinamento)}` : `CPF válido IAF: ${formatPercent(current.boletosValidosIaf || 0)}`} percent={current.metas?.treinamento ? Math.min(((current.treinamento || 0) / current.metas.treinamento) * 100, 100) : (current.treinamento || 0) * 100} gaugeColor={performanceColor(currentRatios?.treinamento || 0)} icon={AlertTriangle} />
             </div>
 
@@ -1713,11 +1678,7 @@ const handleFiles = useCallback(async (fileList) => {
                         border: `1px solid ${rankingType === "consultor" ? COLORS.blue : COLORS.border}`,
                         background: rankingType === "consultor" ? COLORS.blue : COLORS.panelAlt,
                         color: rankingType === "consultor" ? "#fff" : COLORS.text,
-<<<<<<< HEAD
                         borderRadius: 999,
-=======
-                        borderRadius: 999, backdropFilter: "blur(6px)",
->>>>>>> dcd52f4 (atualiza projeto com supabase)
                         padding: "6px 12px",
                         fontWeight: 800,
                         fontSize: 12,
@@ -1727,11 +1688,7 @@ const handleFiles = useCallback(async (fileList) => {
                         border: `1px solid ${rankingType === "pdv" ? COLORS.blue : COLORS.border}`,
                         background: rankingType === "pdv" ? COLORS.blue : COLORS.panelAlt,
                         color: rankingType === "pdv" ? "#fff" : COLORS.text,
-<<<<<<< HEAD
                         borderRadius: 999,
-=======
-                        borderRadius: 999, backdropFilter: "blur(6px)",
->>>>>>> dcd52f4 (atualiza projeto com supabase)
                         padding: "6px 12px",
                         fontWeight: 800,
                         fontSize: 12,
@@ -1755,11 +1712,7 @@ const handleFiles = useCallback(async (fileList) => {
                           border: `1px solid ${metricTab === key ? COLORS.orange : COLORS.border}`,
                           background: metricTab === key ? COLORS.orange : COLORS.panelAlt,
                           color: metricTab === key ? "#fff" : COLORS.text,
-<<<<<<< HEAD
                           borderRadius: 999,
-=======
-                          borderRadius: 999, backdropFilter: "blur(6px)",
->>>>>>> dcd52f4 (atualiza projeto com supabase)
                           padding: "6px 12px",
                           fontWeight: 800,
                           cursor: "pointer",
@@ -1806,11 +1759,7 @@ const handleFiles = useCallback(async (fileList) => {
                     }}>
                       <CartesianGrid strokeDasharray="3 3" />
                       <XAxis type="number" tick={{ fontSize: 11 }} />
-<<<<<<< HEAD
                       {rankingMetaValue > 0 ? <ReferenceLine x={rankingMetaValue} stroke="#ffffff" strokeDasharray="6 6" ifOverflow="extendDomain" /> : null}
-=======
-                      {rankingMetaValue > 0 ? <ReferenceLine x={rankingMetaValue} stroke="#ffffff" strokeOpacity={0.35} strokeDasharray="6 6" ifOverflow="extendDomain" /> : null}
->>>>>>> dcd52f4 (atualiza projeto com supabase)
                       <YAxis dataKey="nome" type="category" width={105} tick={{ fontSize: 12 }} />
                       <Tooltip formatter={(value) => metricTab === "receita" ? formatCurrency(Number(value)) : `${formatNumber(Number(value), 1)}%`} />
                       <Bar dataKey="valor" barSize={12} radius={[0, 8, 8, 0]}>
@@ -1836,23 +1785,14 @@ const handleFiles = useCallback(async (fileList) => {
                       ["BP", formatPercent(current.bpPct || 0), formatPercent(average.bp || 0), performanceColor(currentRatios?.bp || 0), performanceColor(averageRatios?.bp || 0)],
                       ["BT", formatPercent(current.btPct || 0), formatPercent(average.bt || 0), performanceColor(currentRatios?.bt || 0), performanceColor(averageRatios?.bt || 0)],
                       ["Penetração Skin", formatPercent(current.skinPct || 0), formatPercent(average.skin || 0), performanceColor(currentRatios?.skin || 0), performanceColor(averageRatios?.skin || 0)],
-<<<<<<< HEAD
                       ["Fidelidade - Penetração", formatPercent(current.fidelidadePenetracao || 0), formatPercent(average.fidelidadePenetracao || 0), performanceColor(currentRatios?.fidelidadePenetracao || 0), performanceColor(averageRatios?.fidelidadePenetracao || 0)],
                       ["Fidelidade - Resgate", formatPercent(current.fidelidadeResgatePct || 0), formatPercent(average.fidelidadeResgate || 0), performanceColor(currentRatios?.fidelidadeResgate || 0), performanceColor(averageRatios?.fidelidadeResgate || 0)],
-=======
-                      ["Fidelidade Pen.", formatPercent(current.fidelidadePenetracao || 0), formatPercent(average.fidelidadePenetracao || 0), performanceColor(currentRatios?.fidelidadePenetracao || 0), performanceColor(averageRatios?.fidelidadePenetracao || 0)],
-                      ["Fidelidade Resg.", formatPercent(current.fidelidadeResgatePct || 0), formatPercent(average.fidelidadeResgate || 0), performanceColor(currentRatios?.fidelidadeResgate || 0), performanceColor(averageRatios?.fidelidadeResgate || 0)],
->>>>>>> dcd52f4 (atualiza projeto com supabase)
                     ].map(([label, mine, avg, mineColor, avgColor]) => (
                       <div key={label} style={{ background: COLORS.panelAlt, border: `1px solid ${COLORS.border}`, borderRadius: 12, padding: 10, minHeight: 72 }}>
                         <div style={{ fontSize: 11, color: COLORS.subtext, fontWeight: 700, lineHeight: 1.1 }}>{label}</div>
                         <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 2, marginTop: 5 }}>
                           <div style={{ fontWeight: 900, fontSize: 15, color: mineColor, lineHeight: 1.1 }}>{mine}</div>
-<<<<<<< HEAD
                           <div style={{ fontSize: 11, fontWeight: 800, color: avgColor, lineHeight: 1.1 }}>Média {avg}</div>
-=======
-                          <div style={{ fontSize: 11, fontWeight: 800, color: avgColor, lineHeight: 1.1 }}>média {avg}</div>
->>>>>>> dcd52f4 (atualiza projeto com supabase)
                         </div>
                       </div>
                     ))}

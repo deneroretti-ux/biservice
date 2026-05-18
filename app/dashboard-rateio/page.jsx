@@ -54,7 +54,7 @@ const EXECUTADO_VIEW_LS_KEY = "bi_service_rateio_executado_view_v1";
 function Card({ title, children, right = null, className = "", style = undefined }) {
   return (
     <section
-      className={`rounded-2xl p-3 shadow-sm transition-colors duration-200 ${className}`}
+      className={`rounded-2xl p-3 shadow-sm ${className}`}
       style={{ border: `1px solid ${C_CARD_BORDER}`, background: C_CARD_BG, ...(style ?? {}) }}
     >
       {(title || right) && (
@@ -79,14 +79,6 @@ function fmtPct(p) {
 }
 
 
-function fmtBudgetPct(n) {
-  const v = Number(n);
-  if (!Number.isFinite(v)) return "—";
-  return `${v.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%`;
-}
-
-
-
 function TooltipRich({ active, payload, label, labelPrefix }) {
   if (!active || !payload || !payload.length) return null;
 
@@ -104,27 +96,21 @@ function TooltipRich({ active, payload, label, labelPrefix }) {
         </div>
       )}
 
-      {raw?.dreLabel && (
-        <div className="text-[11px] text-emerald-300/90 mb-2">
-          DRE vinculado: <span className="font-semibold">{raw.dreLabel}</span>
-        </div>
-      )}
-
-      <div className="space-y-0.5">
+      <div className="space-y-1">
         {payload.map((p, i) => {
           const name = p.name ?? p.dataKey ?? "Valor";
           const color = p.color || p.stroke || p.fill || "#fff";
           const value = typeof p.value === "number" ? fmtBRL(p.value) : String(p.value ?? "");
           const r = p.payload || {};
-          const pctRaw = r?.execPctLabel || r?.pctLabel || (typeof r?.execPct === "number" ? `${r.execPct.toFixed(1)}%` : (typeof r?.pct === "number" ? `${r.pct.toFixed(1)}%` : null));
+          const pctRaw = r?.pctLabel || (typeof r?.pct === "number" ? `${r.pct.toFixed(1)}%` : null);
           const showPct = (p.dataKey === "valor" || p.name === "Real");
           const pct = showPct ? pctRaw : null;
 
           return (
             <div key={i} className="flex items-center gap-2 text-sm">
               <span className="inline-block h-2.5 w-2.5 rounded-full" style={{ background: color }} />
-              <span className="truncate max-w-[220px]" style={{ color }}>{String(name)}</span>
-              <span className="ml-auto font-semibold" style={{ color }}>
+              <span className="text-white/80 truncate max-w-[220px]">{String(name)}</span>
+              <span className="ml-auto font-semibold text-white">
                 {value}
               </span>
               {pct && <span className="text-white/60 text-xs w-[56px] text-right">{pct}</span>}
@@ -535,7 +521,6 @@ async function parseXlsxSmart(file) {
 
 
 const BUDGET_EMPRESA_LS_KEY = "bi_service_rateio_budget_empresa_v1";
-const BUDGET_MANUAL_CELLS_LS_KEY = "bi_service_rateio_budget_manual_cells_v1";
 
 function pad2(n) {
   return String(Number(n) || 0).padStart(2, "0");
@@ -559,65 +544,29 @@ function normalizeCompanyNameBudget(v) {
     .trim()
     .toUpperCase()
     .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "");
+    .replace(/[̀-ͯ]/g, "");
 
   const compact = raw
     .replace(/\.[^.]+$/g, "")
-    .replace(/^\d+\s*\|\s*/g, "")
-    .replace(/^BOTI\s+/g, "")
-    .replace(/^O\s+BOTICARIO\s+/g, "")
-    .replace(/^BOTICARIO\s+/g, "")
-    .replace(/^LOJA\s+/g, "")
     .replace(/[_-]+/g, " ")
     .replace(/\s+/g, " ")
     .replace(/[^A-Z0-9 ]+/g, " ")
     .trim();
 
-  const txt = compact.replace(/\s+/g, "");
-
-  if (txt.includes("SHOP")) return "SHOPPING";
-
-  if (
-    txt.includes("MONTEAZUL") ||
-    txt.includes("MONTEAZU") ||
-    txt.includes("MONTAZUL") ||
-    (txt.includes("MONTE") && txt.includes("AZUL"))
-  ) return "MONTE AZUL";
-
-  if (
-    txt.includes("PITANGUEIRAS") ||
-    txt.includes("PITANGEIRAS") ||
-    txt.includes("PITANGEURAS") ||
-    txt.includes("PITANG")
-  ) return "PITANGUEIRAS";
-
-  if (txt.includes("VIRADOURO") || txt.includes("VIRAD")) return "VIRADOURO";
-
-  if (
-    txt.includes("COLINA") ||
-    txt.includes("COLI") ||
-    txt.includes("COLNA") ||
-    txt.includes("COLLINA") ||
-    txt.includes("KOLINA") ||
-    txt === "COL" ||
-    txt.startsWith("COL")
-  ) return "COLINA";
-
-  if (
-    txt.includes("CENTRO") ||
-    txt.includes("CENTER") ||
-    txt === "CENT" ||
-    txt.startsWith("CENTRO")
-  ) return "CENTRO";
-
-  if (
-    txt === "VD" ||
-    txt.includes("VENDADIRETA") ||
-    compact.split(" ").includes("VD")
-  ) return "VD";
-
-  const direct = BUDGET_COMPANY_NAME_MAP[compact] || BUDGET_COMPANY_NAME_MAP[txt];
+  const compactNoSpace = compact.replace(/\s+/g, "");
+  const direct = BUDGET_COMPANY_NAME_MAP[compact] || BUDGET_COMPANY_NAME_MAP[compactNoSpace];
   if (direct) return direct;
+
+  const tokenSet = new Set(compact.split(" ").filter(Boolean));
+  const has = (...terms) => terms.every((t) => tokenSet.has(t));
+
+  if (has("MONTE", "AZUL") || compact.includes("MONTE AZUL") || compact.includes("MONTEAZUL")) return "MONTE AZUL";
+  if (compact.includes("PITANGUEIRAS") || compact.includes("PITANGEURAS")) return "PITANGUEIRAS";
+  if (compact.includes("VIRADOURO")) return "VIRADOURO";
+  if (compact.includes("SHOPPING")) return "SHOPPING";
+  if (compact === "VD" || tokenSet.has("VD") || compact.includes(" VD ") || compact.startsWith("VD ") || compact.endsWith(" VD")) return "VD";
+  if (compact.includes("COLINA")) return "COLINA";
+  if (compact.includes("CENTRO")) return "CENTRO";
 
   return compact;
 }
@@ -627,95 +576,6 @@ function normalizeCompanyNameBudget(v) {
 const PLANO_MATCH_LS_KEY = "bi_service_rateio_plano_depara_v2";
 
 const DEFAULT_PLANO_MATCH_MAP = {
-  "esforcos de marketing promocional": "10.6.1.1.1 - MKT-REG: 01. Mídia e Ativação (Gestão do GB)",
-  "seguros": "12.3.1.7 - Seguros",
-  "eventos": "10.6.2.1 - Eventos",
-  "mkt reg 02 evento e patrocinio": "10.6.2.1 - Eventos",
-  "mkt reg 06 impressao e producao de material": "10.6.2.3.1 - MKT-REG: 06. Impressão e Produção de Material",
-  "impressao e producao de material": "10.6.2.3.1 - MKT-REG: 06. Impressão e Produção de Material",
-  "material promocional": "10.5.1.3 - Brindes",
-  "icms imposto sobre operacoes relativas a circulacao de mercadorias": "8.2.1 - ICMS (ICMS ST - ICMS Próprio)",
-  "icms": "8.2.1 - ICMS (ICMS ST - ICMS Próprio)",
-  "demonstradores": "10.5.2 - Demonstradores",
-  "outros impostos e taxas": "10.3.2 - PDD e Taxas de Boleto",
-  "desconto sobre boticario franchising": "8.3.2 - TRF Desconto",
-  "desconto sobre boticario franchising fc": "8.3.2 - TRF Desconto",
-  "aluguel fixo": "12.2.1 - Aluguel Fixo",
-  "amostras": "10.5.1.2 - Amostras",
-  "antecipacao de domingo ou feriado trabalhado": "12.1.1.1.3 - Desconto gerais sobre folha",
-  "botiexpert": "10.6.1.1.1 - MKT-REG: 01. Mídia e Ativação (Gestão do GB)",
-  "brindes": "10.5.1.3 - Brindes",
-  "cartao presente": "10.3.1.1 - Taxa Cartão Presente",
-  "catalogos e revistas": "10.7.1 - Catálogos e Revistas",
-  "cheque devolvido 1 vez": "10.3.2.3.1 - Perdas Devedores Duvidosos",
-  "cobranca venda direta": "10.3.2.3.1 - Perdas Devedores Duvidosos",
-  "cofins contribuicao para financiamento da seguridade social": "6.1.3 - COFINS sobre Receita",
-  "consorcio de imoveis": "12.2.3 - Condomínio",
-  "csll contribuicao social sobre o lucro liquido": "19.2 - CSLL",
-  "debito de vendas": "12.3.1.6 - Outras Despesas Administrativas",
-  "debito estouro de base negativa": "12.1.1.1.3 - Desconto gerais sobre folha",
-  "desconto sobre 13 salario": "12.1.1.1.3 - Desconto gerais sobre folha",
-  "desconto sobre adiantamentos": "12.1.1.1.1 - Desconto sobre adiantamento salarial",
-  "desconto sobre beneficios": "12.1.1.4.10 - Desconto sobre benefícios",
-  "desconto sobre compras de mercadorias": "12.1.1.1.2 - Desconto sobre férias pagas",
-  "desconto sobre encargos sociais": "12.1.1.3.1 - Desconto sobre INSS - Funcionário",
-  "desconto sobre ferias pagas": "12.1.1.1.2 - Desconto sobre férias pagas",
-  "desconto sobre material de embalagem": "17.1.2 - Desconto sobre Despesas",
-  "desconto sobre prm": "10.6.2.3.1 - MKT-REG: 06. Impressão e Produção de Material",
-  "desconto sobre rescisao contratual": "12.1.1.1.3 - Desconto gerais sobre folha",
-  "despesas com entrega": "10.2.1 - Despesas com Entrega Revendedoras",
-  "despesas com veiculos manutencao": "12.3.3.1 - Manutenção e Reparos",
-  "despesas com veiculos seguro": "12.3.1.7.2 - Seguros Terceiros",
-  "despesas com viagem": "12.3.1.6 - Outras Despesas Administrativas",
-  "domingo ou feriado trabalhado": "12.1.1.1.4 - Salários",
-  "dsr descanso semanal remunerado": "12.1.1.1.4 - Salários",
-  "ecad direitos autorais escritorio central de arrecadacao e distribuicao": "12.3.1.6 - Outras Despesas Administrativas",
-  "embalagens vendidas": "10.3.4 - Embalagens (Antilhas)",
-  "estouro de base negativa": "12.1.1.1.4 - Salários",
-  "exames admissionais demissionais": "12.1.1.5.4 - Exames Adminissionais / Demissionais",
-  "falta de caixa": "12.3.1.6 - Outras Despesas Administrativas",
-  "farmacia": "12.1.1.9 - Farmácia",
-  "flaconetes": "10.5.1.1 - Flaconetes",
-  "fundacao grupo boticario": "12.3.1.6 - Outras Despesas Administrativas",
-  "icms st imposto sobre operacoes relativas a circulacao de mercadorias": "8.2.1 - ICMS (ICMS ST - ICMS Próprio)",
-  "ipi imposto sobre produtos industrializados": "8.2.2 - IPI",
-  "iptu ocupacao imposto predial e territorial urbano": "12.2.5 - IPTU Ocupação",
-  "iss sobre receita imposto sobre servicos": "6.1.4 - ISS sobre Receita",
-  "juros e multa sobre emprestimos": "17.2.2 - Juros e multa sobre Empréstimos",
-  "juros e multa sobre financiamentos": "17.2.1 - Juros e multa sobre Financiamento",
-  "juros sobre despesas": "17.2.3 - Juros e multa sobre Despesas",
-  "material auxiliar de embalagem": "10.2.4 - Material Auxiliar de Embalagem (MAE)",
-  "material de embalagem": "10.2.4 - Material Auxiliar de Embalagem (MAE)",
-  "mensalidade de licenca de software": "12.3.1.3 - Software",
-  "midia local": "10.6.1.1.1 - MKT-REG: 01. Mídia e Ativação (Gestão do GB)",
-  "mkt digital": "10.6.2.4.1 - MKT-REG: 08. Redes Sociais e Influenciador Digital",
-  "mkt reg 01 midia e ativacao": "10.6.1.1.1 - MKT-REG: 01. Mídia e Ativação (Gestão do GB)",
-  "mkt reg 03 midia exterior": "10.6.2.2.1 - MKT-REG: 03. Mídia Exterior",
-  "mkt reg 04 midia e ativacao": "10.6.2.2.2 - MKT-REG: 04. Mídia e Ativação (Gestão do CP com agências locais)",
-  "mkt reg 05 midia e ativacao": "10.6.2.2.3 - MKT-REG: 05. Mídia e Ativação (Gestão do CP com Opus ou Idea3)",
-  "mkt reg 08 influenciador digital": "10.6.2.4.1 - MKT-REG: 08. Redes Sociais e Influenciador Digital",
-  "mkt reg 09 loja digital e mensagem sms turbo": "10.6.2.4.2 - MKT-REG: 09. Loja Digital e Mensagem SMS Turbo",
-  "outras despesas": "12.3.1.6 - Outras Despesas Administrativas",
-  "outras despesas apoio a operacao": "12.3.1.6 - Outras Despesas Administrativas",
-  "pagamento de emprestimos": "17.2.2 - Juros e multa sobre Empréstimos",
-  "pagamento de mutuos": "17.2.2 - Juros e multa sobre Empréstimos",
-  "pis programa de integracao social": "6.1.2 - PIS sobre Receita",
-  "ppra programa de prevencao de riscos ambientais": "12.1.2.6 - Saúde e Segurança do Trabalho",
-  "presente para pessoal": "12.1.1.1.4 - Salários",
-  "recuperacao e esforcos de marketing": "8.6.3 - Recuperação de Esforços de Marketing (REM)",
-  "restituicao de impostos e taxas": "17.1.2 - Desconto sobre Despesas",
-  "seguro de vida": "12.1.1.4.8 - Seguro de Vida",
-  "simples nacional": "19.3 - Simples Nacional",
-  "taxa com cartao de credito debito": "10.3.1.2 - Taxa Cartão de Crédito/Debito",
-  "taxa de alvara funcionamento": "12.3.1.6 - Outras Despesas Administrativas",
-  "taxa emissao de boleto": "10.3.2.1 - Taxa Emissão de Boleto",
-  "uniforme": "12.1.1.11 - Uniforme",
-  "comissao sobre vendas": "12.1.1.6 - Comissão sobre Vendas",
-  "aluguel variavel": "12.2.2 - Aluguel Variável",
-  "premio bonus": "12.1.1.7 - Prêmio/Bônus",
-  "horas extras": "12.1.1.1.7 - Horas Extras",
-  "display": "10.7.2.2 - Display",
-  "mkt reg 01 midia e ativacao gestao do gb": "10.6.1.1.1 - MKT-REG: 01. Mídia e Ativação (Gestão do GB)",
   "compra de mercadorias fc": "2.1.1 - CMV",
   "compra de mercadorias sc": "2.1.1 - CMV",
   "compra de mercadorias lf": "2.1.1 - CMV",
@@ -730,11 +590,15 @@ const DEFAULT_PLANO_MATCH_MAP = {
   "ipi": "2.1.1 - CMV",
   "material auxiliar de embalagem mae": "4.5 - Material De Embalagem",
   "mae": "4.5 - Material De Embalagem",
+
+  "esforcos de marketing promocional": "4.4 - Esforços De Marketing Promocional (3%)",
   "despesas com encontro de ciclo": "4.4.1 - Encontro de Ciclo",
+  "material promocional": "4.4.6 - Produção/Propaganda",
   "material de publicidade e propaganda": "4.4.6 - Produção/Propaganda",
   "mkt reg 01 midia e ativacao gestao do gb": "4.4.4 - Mídia Local",
   "mkt reg 04 midia e ativacao gestao do cp com agencias locais": "4.4.4 - Mídia Local",
   "mkt reg 05 midia e ativacao gestao do cp com opus ou idea3": "4.4.5 - Mídia Regional",
+  "mkt reg 06 impressao e producao de material": "4.4.6 - Produção/Propaganda",
 
   "remuneracao de esforcos tech ret": "6.2.11 - ZENITH - Outros Serviços Terceirizados",
   "servicos de informatica": "6.2.3 -  Serviços De Informática",
@@ -749,6 +613,7 @@ const DEFAULT_PLANO_MATCH_MAP = {
   "recrutamento e selecao": "6.1.4.4 - Recrutamento e Seleção",
 
   "despesas gerencial": "6.8 - Despesas Administrativas",
+  "outros impostos e taxas": "6.9.3 - Impostos e Taxas",
   "central de inicios": "6.9 - Despesas Gerais",
   "bens nao depreciaveis valor ate 1 200 00": "6.10.3 - Bens não Depreciáveis",
   "maquinas equipamentos e moveis fc": "6.10.1 - Máq., Equip. e Móveis",
@@ -825,8 +690,8 @@ function planoSimilarity(a, b) {
 
 function loadPlanoMatchMap() {
   return {
-    ...planoDeParaOficial,
     ...DEFAULT_PLANO_MATCH_MAP,
+    ...planoDeParaOficial,
   };
 }
 
@@ -843,31 +708,9 @@ function resolvePlanoMatch(planoRateio, drePlanos = [], planoMap = {}) {
     return { matched: null, confidence: 0, mode: "unmatched", normalizedRateio };
   }
 
-  const mapped = DEFAULT_PLANO_MATCH_MAP?.[normalizedRateio] || planoMap?.[normalizedRateio];
+  const mapped = planoMap?.[normalizedRateio];
   if (mapped) {
-    if (!drePlanos?.length) {
-      return { matched: mapped, confidence: 1, mode: "mapped", normalizedRateio };
-    }
-
-    const mappedNorm = normalizePlanoBudgetKey(mapped);
-    const mappedExisting = drePlanos.find((p) => normalizePlanoBudgetKey(p) === mappedNorm);
-    if (mappedExisting) {
-      return { matched: mappedExisting, confidence: 1, mode: "mapped", normalizedRateio };
-    }
-
-    // Se o código mudou mas o texto do DRE é equivalente, aceita o melhor destino parecido.
-    let bestMapped = null;
-    let bestMappedScore = 0;
-    for (const p of drePlanos) {
-      const score = planoSimilarity(mapped, p);
-      if (score > bestMappedScore) {
-        bestMappedScore = score;
-        bestMapped = p;
-      }
-    }
-    if (bestMapped && bestMappedScore >= 0.78) {
-      return { matched: bestMapped, confidence: bestMappedScore, mode: "mapped-fuzzy", normalizedRateio };
-    }
+    return { matched: mapped, confidence: 1, mode: "mapped", normalizedRateio };
   }
 
   const exact = drePlanos.find((p) => normalizePlanoBudgetKey(p) === normalizedRateio);
@@ -932,229 +775,34 @@ function monthIndexFromNameBR(v) {
   return map[s] || null;
 }
 
-
-const BUDGET_REVENUE_LINE_KEYS = new Set([
-  "receita bruta",
-  "venda de mercadorias",
-  "receita livre de descontos e devolucoes",
-  "receita liquida de comissao",
-  "receita liquida",
-]);
-
-function isBudgetRevenueLine(plano) {
-  const normalized = normalizePlanoBudgetKey(plano);
-  return BUDGET_REVENUE_LINE_KEYS.has(normalized);
-}
-
-function getManualBudgetOverride(plano, budgetsRef) {
-  const key = String(plano ?? "");
-  const entry = budgetsRef?.[key];
-  const value = Number(entry?.value ?? 0);
-  return Number.isFinite(value) && value > 0 ? value : 0;
-}
-
 async function parseBudgetReceitaXlsx(file) {
   const buf = await file.arrayBuffer();
   const wb = XLSX.read(buf, { type: "array", cellDates: true });
   const ws = wb.Sheets[wb.SheetNames[0]];
   const matrix = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "", raw: true });
 
-  const norm = (v) =>
-    String(v ?? "")
-      .normalize("NFD")
-      .replace(/[\u0300-\u036f]/g, "")
-      .toUpperCase()
-      .trim();
-
-  let headerIdx = -1;
-  for (let i = 0; i < matrix.length; i++) {
-    const row = matrix[i] || [];
-    const hasMes = row.some((c) => {
-      const x = norm(c);
-      return x === "MES" || x === "MÊS" || x.includes("MES");
-    });
-    const nonEmpty = row.filter((c) => String(c ?? "").trim() !== "").length;
-    if (hasMes && nonEmpty >= 2) {
-      headerIdx = i;
-      break;
-    }
-  }
-
-  if (headerIdx < 0) {
-    throw new Error("Não encontrei a linha de cabeçalho da receita mensal com a coluna Mês.");
-  }
-
-  const headerRow = matrix[headerIdx] || [];
+  const headerRow = matrix.find((r) => String(r?.[0] ?? "").toUpperCase().includes("MÊS") || String(r?.[0] ?? "").toUpperCase().includes("MES")) || [];
+  const headerIdx = matrix.indexOf(headerRow);
   const yearMatch = String(file?.name || "").match(/(20\d{2})/);
   const year = Number(yearMatch?.[1]) || new Date().getFullYear();
 
-  const monthColIdx = headerRow.findIndex((c) => {
-    const x = norm(c);
-    return x === "MES" || x === "MÊS" || x.includes("MES");
-  });
-
-  const companyColumns = [];
-  for (let i = 0; i < headerRow.length; i++) {
-    if (i === monthColIdx) continue;
-
-    const rawCompany = String(headerRow[i] ?? "").trim();
-    if (!rawCompany) continue;
-
-    const company = normalizeCompanyNameBudget(rawCompany);
-    if (!company || company === "(SEM EMPRESA)") continue;
-
-    companyColumns.push({ idx: i, rawCompany, company });
-  }
-
+  const companies = headerRow.slice(1).map((c) => normalizeCompanyNameBudget(c)).filter(Boolean);
   const entries = {};
-  for (const col of companyColumns) {
-    if (!entries[col.company]) entries[col.company] = {};
-  }
+
+  for (const c of companies) entries[c] = {};
 
   for (const row of matrix.slice(headerIdx + 1)) {
-    const month = monthIndexFromNameBR(row?.[monthColIdx]);
+    const month = monthIndexFromNameBR(row?.[0]);
     if (!month) continue;
-
     const mes = `${year}-${pad2(month)}`;
-
-    for (const col of companyColumns) {
-      const value = Math.abs(toNumberBR(row?.[col.idx]));
-      if (!entries[col.company]) entries[col.company] = {};
-      entries[col.company][mes] = value;
+    for (let i = 1; i < headerRow.length; i++) {
+      const company = normalizeCompanyNameBudget(headerRow[i]);
+      if (!company) continue;
+      entries[company][mes] = Math.abs(toNumberBR(row?.[i]));
     }
   }
 
-  return {
-    year,
-    companies: Object.keys(entries).sort((a, b) => compareBudgetPlanoOrder(a, b)),
-    entries,
-    filename: file?.name || "",
-    companyColumns,
-  };
-}
-
-
-function extractBudgetCompanyFromWorkbook(wb, file) {
-  try {
-    const filtroSheetName = (wb.SheetNames || []).find((name) =>
-      String(name || "")
-        .normalize("NFD")
-        .replace(/[\u0300-\u036f]/g, "")
-        .toLowerCase()
-        .includes("filtros")
-    );
-
-    if (filtroSheetName && wb.Sheets?.[filtroSheetName]) {
-      const matrix = XLSX.utils.sheet_to_json(wb.Sheets[filtroSheetName], {
-        header: 1,
-        defval: "",
-        raw: true,
-      });
-
-      const norm = (v) =>
-        String(v ?? "")
-          .normalize("NFD")
-          .replace(/[\u0300-\u036f]/g, "")
-          .toUpperCase()
-          .trim();
-
-      const isValidCompanyCandidate = (v) => {
-        const s = norm(v);
-        if (!s) return false;
-        if (["MODELO", "EMPRESAS", "CENTROS DE CUSTO", "TODOS", "STATUS", "REGIME"].includes(s)) return false;
-        if (s.includes("CENTROS DE CUSTO")) return false;
-        if (s.includes("APENAS VALORES")) return false;
-        return /\d+\s*\|/.test(s) || /BOTI|BOTICARIO|SHOP|CENTRO|COLINA|MONTE|PITANG|VIRAD|VENDA\s*DIRETA|\bVD\b/.test(s);
-      };
-
-      // Melhor caso do seu DRE:
-      // linha 2: "... Empresas ... Centros de Custo"
-      // linha 3: "... 4 | BOTI SHOPPING ... Todos"
-      // Então: acha a coluna da palavra Empresas e pega a linha abaixo na mesma coluna.
-      for (let r = 0; r < matrix.length; r++) {
-        const row = matrix[r] || [];
-        for (let c = 0; c < row.length; c++) {
-          if (norm(row[c]).includes("EMPRESAS")) {
-            for (let rr = r + 1; rr < Math.min(matrix.length, r + 8); rr++) {
-              const candidate = matrix?.[rr]?.[c];
-              if (isValidCompanyCandidate(candidate)) {
-                return normalizeCompanyNameBudget(candidate);
-              }
-            }
-
-            // Fallback: mesma linha depois da célula Empresas, mas somente se for candidato real de empresa.
-            for (let cc = c + 1; cc < row.length; cc++) {
-              const candidate = row?.[cc];
-              if (isValidCompanyCandidate(candidate)) {
-                return normalizeCompanyNameBudget(candidate);
-              }
-            }
-          }
-        }
-      }
-
-      // Fallback geral: procura qualquer célula no formato "4 | BOTI SHOPPING".
-      for (const row of matrix || []) {
-        for (const cell of row || []) {
-          if (isValidCompanyCandidate(cell)) {
-            return normalizeCompanyNameBudget(cell);
-          }
-        }
-      }
-    }
-  } catch (e) {
-    console.warn("Não foi possível ler empresa da aba Filtros Escolhidos", e);
-  }
-
-  return normalizeCompanyNameBudget(String(file?.name || "").replace(/\.[^.]+$/, ""));
-}
-
-function detectWorkbookType(file, wb) {
-  const filename = String(file?.name || "")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toUpperCase();
-
-  const sheetNames = (wb?.SheetNames || []).map((s) =>
-    String(s || "")
-      .normalize("NFD")
-      .replace(/[\u0300-\u036f]/g, "")
-      .toUpperCase()
-  );
-
-  if (filename.includes("RECEITA")) return "receita";
-  if (filename.includes("RATEIO")) return "rateio";
-  if (filename.includes("DRE")) return "dre";
-
-  if (sheetNames.some((s) => s === "DRE" || s.includes("DRE"))) return "dre";
-  if (sheetNames.some((s) => s.includes("FILTROS"))) return "dre";
-
-  try {
-    const ws = wb.Sheets[wb.SheetNames?.[0]];
-    const matrix = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "", raw: true }).slice(0, 30);
-    const flat = matrix.flat().map((c) =>
-      String(c ?? "")
-        .normalize("NFD")
-        .replace(/[\u0300-\u036f]/g, "")
-        .toUpperCase()
-        .trim()
-    );
-
-    const hasMes = flat.some((x) => x === "MES" || x === "MÊS");
-    const hasReceitaHeaders = flat.some((x) => ["CENTRO", "COLINA", "SHOPPING", "VD", "VIRADOURO", "PITANGUEIRAS"].includes(x));
-    if (hasMes && hasReceitaHeaders) return "receita";
-
-    const hasRateioHeaders =
-      flat.some((x) => x.includes("VENCIMENTO")) &&
-      flat.some((x) => x.includes("VALOR BRUTO")) &&
-      flat.some((x) => x.includes("PLANO"));
-    if (hasRateioHeaders) return "rateio";
-
-    const hasDreMonthCols = flat.some((x) => /^\d{2}\/\d{4}$/.test(x));
-    if (hasDreMonthCols) return "dre";
-  } catch {}
-
-  return "unknown";
+  return { year, companies, entries, filename: file?.name || "" };
 }
 
 async function parseBudgetDreXlsx(file) {
@@ -1163,308 +811,45 @@ async function parseBudgetDreXlsx(file) {
   const ws = wb.Sheets["DRE"] || wb.Sheets[wb.SheetNames[0]];
   const matrix = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "", raw: true });
 
-  let headerIdx = 0;
-  for (let r = 0; r < Math.min(matrix.length, 20); r++) {
-    const row = matrix[r] || [];
-    const hasName = row.some((c) => String(c ?? "").trim().toLowerCase() === "nome");
-    const hasMonth = row.some((c) => /^\d{2}\/\d{4}$/.test(String(c ?? "").trim()));
-    if (hasName && hasMonth) {
-      headerIdx = r;
-      break;
-    }
-  }
-
-  const header = matrix[headerIdx] || [];
+  const header = matrix[0] || [];
   const monthCols = [];
   for (let i = 1; i < header.length; i++) {
-    const m = String(header[i] ?? "").trim().match(/^(\d{2})\/(\d{4})$/);
-    if (m) monthCols.push({ idx: i, month: Number(m[1]), year: Number(m[2]), label: String(header[i] ?? "").trim() });
+    const m = String(header[i] ?? "").match(/^(\d{2})\/(\d{4})$/);
+    if (m) monthCols.push({ idx: i, month: Number(m[1]), year: Number(m[2]) });
   }
 
-  const company = extractBudgetCompanyFromWorkbook(wb, file);
+  const company = normalizeCompanyNameBudget(String(file?.name || "").replace(/\.[^.]+$/, ""));
   const entries = [];
-  let ordemLinha = 0;
 
-  for (const row of matrix.slice(headerIdx + 1)) {
+  for (const row of matrix.slice(1)) {
     const rawName = String(row?.[0] ?? "").trim();
     if (!rawName) continue;
 
-    const planoCode = budgetPlanoCode(rawName);
-
     for (const mc of monthCols) {
-      const valor = toNumberBR(row?.[mc.idx]);
+      const valor = Math.abs(toNumberBR(row?.[mc.idx]));
+      if (!valor) continue;
       entries.push({
         empresa: company,
         month: mc.month,
         sourceYear: mc.year,
-        sourceMonthLabel: mc.label,
         plano: rawName,
         planoKey: normKey(rawName),
         valor,
-        ordemLinha,
-        ordemMes: mc.idx,
-        planoCode,
-        isFromDRE: true,
       });
     }
-
-    ordemLinha += 1;
   }
 
   return { company, entries, filename: file?.name || "" };
-}
-
-function findReceitaCompanyKey(receitaEntries, dreCompany) {
-  const dreNorm = normalizeCompanyNameBudget(dreCompany);
-  const keys = Object.keys(receitaEntries || {});
-
-  let exact = keys.find((k) => normalizeCompanyNameBudget(k) === dreNorm);
-  if (exact) return exact;
-
-  const dreTxt = normalizePlanoBudgetKey(dreNorm);
-  exact = keys.find((k) => {
-    const keyTxt = normalizePlanoBudgetKey(k);
-    return keyTxt === dreTxt || keyTxt.includes(dreTxt) || dreTxt.includes(keyTxt);
-  });
-  if (exact) return exact;
-
-  return null;
-}
-
-
-function budgetPlanoCode(plano) {
-  const m = String(plano ?? "").trim().match(/^(\d+(?:\.\d+)*)\s*-/);
-  return m?.[1] || "";
-}
-
-
-function compareBudgetPlanoOrder(a, b) {
-  const getPlano = (x) => String(x?.plano ?? x ?? "").trim();
-
-  const parseCode = (x) => {
-    const plano = getPlano(x);
-    const m = plano.match(/^(\d+(?:\.\d+)*)\s*-/);
-    if (!m) return null;
-    return m[1].split(".").map((p) => Number(p));
-  };
-
-  const ca = parseCode(a);
-  const cb = parseCode(b);
-
-  if (ca && cb) {
-    const max = Math.max(ca.length, cb.length);
-    for (let i = 0; i < max; i++) {
-      const va = ca[i];
-      const vb = cb[i];
-
-      if (va == null && vb != null) return -1;
-      if (va != null && vb == null) return 1;
-      if (va !== vb) return va - vb;
-    }
-    return 0;
-  }
-
-  if (ca && !cb) return -1;
-  if (!ca && cb) return 1;
-
-  return getPlano(a).localeCompare(getPlano(b), "pt-BR", { numeric: true, sensitivity: "base" });
-}
-
-
-function budgetPlanoParentCode(plano) {
-  const code = budgetPlanoCode(plano);
-  if (!code || !code.includes(".")) return "";
-  const parts = code.split(".");
-  parts.pop();
-  return parts.join(".");
-}
-
-function budgetPlanoLevel(plano) {
-  const code = budgetPlanoCode(plano);
-  return code ? code.split(".").length : 1;
-}
-
-function isBudgetPlanoVisibleInTree(row, expandedSet) {
-  const code = budgetPlanoCode(row?.plano);
-  if (!code || !code.includes(".")) return true;
-
-  const parts = code.split(".");
-  for (let i = 1; i < parts.length; i++) {
-    const parent = parts.slice(0, i).join(".");
-    if (!expandedSet?.has(parent)) return false;
-  }
-  return true;
-}
-
-function budgetPlanoHasChildren(row, allRows) {
-  const code = budgetPlanoCode(row?.plano);
-  if (!code) return false;
-  return (allRows || []).some((other) => {
-    const otherCode = budgetPlanoCode(other?.plano);
-    return otherCode && otherCode.startsWith(code + ".");
-  });
-}
-
-
-
-
-
-
-
-
-function monthNumFromMesKey(mesKey) {
-  const s = String(mesKey ?? "");
-  if (!s) return "";
-  if (/^\d{2}$/.test(s)) return s;
-  const p = s.split("-");
-  if (p.length >= 2) return String(p[1]).padStart(2, "0");
-  return String(s).padStart(2, "0");
-}
-
-function oneMonthSetFromMesKey(mesKey) {
-  const m = monthNumFromMesKey(mesKey);
-  return m ? new Set([m]) : null;
-}
-
-function monthMatchesFilter(mesKey, monthKeySet) {
-  if (!monthKeySet || !monthKeySet.size) return true;
-  return monthKeySet.has(monthNumFromMesKey(mesKey));
-}
-
-function budgetComparableValueFromMonth(mm) {
-  if (Number.isFinite(Number(mm?.manualPrevisto))) {
-    return Math.abs(Number(mm.manualPrevisto));
-  }
-  const receitaMes = Number(mm?.receita ?? 0) || 0;
-  const pctPlanoReceita = Number(mm?.pctReceita ?? mm?.pct ?? 0) || 0;
-  return receitaMes * Math.abs(pctPlanoReceita);
-}
-
-function manualBudgetCellKey(empresa, plano, mes = "Todos") {
-  return `${String(empresa ?? "Todas")}|${String(plano ?? "")}|${String(mes ?? "Todos")}`;
-}
-
-function getManualBudgetCellValue(manualMap, empresa, plano, mes = "Todos") {
-  const key = manualBudgetCellKey(empresa, plano, mes);
-  const n = Number(manualMap?.[key]);
-  return Number.isFinite(n) ? n : null;
-}
-
-
-
-function getManualBudgetCellValueAny(manualMap, empresa, planos = [], mes = "Todos") {
-  for (const plano of planos || []) {
-    const val = getManualBudgetCellValue(manualMap, empresa, plano, mes);
-    if (val != null) return val;
-  }
-  return null;
-}
-
-
-function manualBudgetNormalizedKey(empresa, plano, mes = "Todos") {
-  return `${String(empresa ?? "Todas")}|${normalizePlanoBudgetKey(plano)}|${String(mes ?? "Todos")}`;
-}
-
-function getManualBudgetCellValueRobusto(manualMap, empresa, planos = [], mes = "Todos") {
-  const candidates = Array.from(
-    new Set(
-      (planos || [])
-        .filter(Boolean)
-        .flatMap((p) => [String(p), normalizePlanoBudgetKey(p)])
-    )
-  );
-
-  for (const plano of candidates) {
-    const keyNormal = manualBudgetCellKey(empresa, plano, mes);
-    const n1 = Number(manualMap?.[keyNormal]);
-    if (Number.isFinite(n1)) return n1;
-
-    const keyNorm = manualBudgetNormalizedKey(empresa, plano, mes);
-    const n2 = Number(manualMap?.[keyNorm]);
-    if (Number.isFinite(n2)) return n2;
-  }
-
-  return null;
-}
-
-
-function getManualBudgetCellValueSeguro(manualMap, empresa, planos = [], mes = "Todos") {
-  const seen = new Set();
-
-  for (const p of planos || []) {
-    if (!p) continue;
-    const candidates = [String(p), normalizePlanoBudgetKey(p)].filter(Boolean);
-
-    for (const plano of candidates) {
-      const keys = [
-        manualBudgetCellKey(empresa, plano, mes),
-        manualBudgetNormalizedKey(empresa, plano, mes),
-      ];
-
-      for (const key of keys) {
-        if (seen.has(key)) continue;
-        seen.add(key);
-        const n = Number(manualMap?.[key]);
-        if (Number.isFinite(n)) return n;
-      }
-    }
-  }
-
-  return null;
-}
-
-function markBudgetCalcEligibility(entries) {
-  const list = Object.values(entries || {});
-
-  for (const item of list) {
-    const code = budgetPlanoCode(item?.plano);
-    item.planoCode = code;
-    item.isTotalizadora = false;
-    item.calcEligible = true;
-  }
-
-  for (const item of list) {
-    const code = item?.planoCode || "";
-    if (!code) continue;
-
-    const hasChild = list.some((other) => {
-      if (other === item) return false;
-      if (other?.empresa !== item?.empresa) return false;
-      const otherCode = other?.planoCode || "";
-      return otherCode.startsWith(code + ".");
-    });
-
-    if (hasChild) {
-      item.isTotalizadora = true;
-      item.calcEligible = false;
-    }
-  }
-
-  // Linhas de receita são mantidas para visualização, mas só a linha mais detalhada entra no cálculo.
-  // Ex.: 1 - Receita Bruta fica fora quando existe 1.1 - Venda de Mercadorias.
-  // Demais totalizadores também ficam fora para evitar duplicidade.
-  return entries;
 }
 
 function buildBudgetEmpresaPayload(receitaData, dreDataList) {
   const year = Number(receitaData?.year) || new Date().getFullYear();
   const entries = {};
   const unmatched = new Set();
-  const companyLinks = [];
 
-  for (let dreIdx = 0; dreIdx < (dreDataList || []).length; dreIdx++) {
-    const dre = dreDataList[dreIdx];
+  for (const dre of dreDataList || []) {
     const company = normalizeCompanyNameBudget(dre?.company);
-    const receitaCompanyKey = findReceitaCompanyKey(receitaData?.entries || {}, company);
-    const receitaByMonth = receitaCompanyKey ? receitaData?.entries?.[receitaCompanyKey] : null;
-
-    companyLinks.push({
-      dreEmpresa: company,
-      receitaEmpresa: receitaCompanyKey || "",
-      matched: !!receitaByMonth,
-      dreFile: dre?.filename || "",
-    });
-
+    const receitaByMonth = receitaData?.entries?.[company];
     if (!receitaByMonth) {
       unmatched.add(company);
       continue;
@@ -1473,64 +858,42 @@ function buildBudgetEmpresaPayload(receitaData, dreDataList) {
     for (const item of dre.entries || []) {
       const mes = `${year}-${pad2(item.month)}`;
       const receita = Math.abs(toNumberBR(receitaByMonth?.[mes]));
-      const valorDreBase = Number(item.valor) || 0;
-      const receitaLine = isBudgetRevenueLine(item?.plano);
+      if (!receita) continue;
 
-      const previsto = receitaLine && receita ? receita : valorDreBase;
-      const pct = receitaLine ? 1 : (receita ? valorDreBase / receita : 0);
-
+      const pct = (Number(item.valor) || 0) / receita;
+      const previsto = receita * pct;
       const key = `${company}|${normKey(item.plano)}`;
+
       const prev = entries[key] || {
         empresa: company,
         plano: item.plano,
         planoKey: normKey(item.plano),
         totalPrevisto: 0,
         months: {},
-        ordemLinha: Number(item.ordemLinha ?? 999999),
-        ordemArquivo: dreIdx,
-        planoCode: item.planoCode || budgetPlanoCode(item.plano),
       };
 
       prev.totalPrevisto += previsto;
       prev.months[mes] = {
         receita,
         pct,
-        pctReceita: receita ? (previsto / receita) : 0,
         previsto,
-        valorDreBase,
-        receitaPreenchida: receitaLine,
-        receitaEmpresaKey: receitaCompanyKey,
-        sourceYear: item.sourceYear,
-        sourceMonthLabel: item.sourceMonthLabel,
+        valorDreBase: Number(item.valor) || 0,
       };
 
       entries[key] = prev;
     }
   }
 
-  markBudgetCalcEligibility(entries);
-
-  const orderedEntries = {};
-  for (const item of Object.values(entries).sort((a, b) => {
-    const byCode = compareBudgetPlanoOrder(a, b);
-    if (byCode !== 0) return byCode;
-    return Number(a?.ordemLinha ?? 999999) - Number(b?.ordemLinha ?? 999999);
-  })) {
-    orderedEntries[`${item.empresa}|${normKey(item.plano)}`] = item;
-  }
-
   return {
     year,
-    entries: orderedEntries,
+    entries,
     summary: {
       year,
-      empresas: Array.from(new Set(Object.values(orderedEntries).map((x) => x.empresa))).sort(),
-      planos: Array.from(new Set(Object.values(orderedEntries).map((x) => x.plano))).sort((a, b) => compareBudgetPlanoOrder(a, b)),
-      combinacoes: Object.keys(orderedEntries).length,
+      empresas: Array.from(new Set(Object.values(entries).map((x) => x.empresa))).sort(),
+      planos: Array.from(new Set(Object.values(entries).map((x) => x.plano))).sort(),
+      combinacoes: Object.keys(entries).length,
       unmatchedCompanies: Array.from(unmatched),
-      companyLinks,
       receitaFile: receitaData?.filename || "",
-      receitaCompanies: Object.keys(receitaData?.entries || {}).sort(),
       dreFiles: (dreDataList || []).map((x) => x.filename || ""),
     },
   };
@@ -1551,106 +914,8 @@ function getStandaloneBootParams() {
   }
 }
 
-
-async function detectUploadKind(file) {
-  const fileName = String(file?.name || "")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase();
-
-  if (fileName.includes("receita")) return "receita";
-  if (fileName.includes("rateio")) return "rateio";
-  if (fileName.includes("dre")) return "dre";
-
-  try {
-    const buf = await file.arrayBuffer();
-    const wb = XLSX.read(buf, { type: "array", cellDates: true });
-    const sheetNames = (wb.SheetNames || []).map((s) =>
-      String(s || "")
-        .normalize("NFD")
-        .replace(/[\u0300-\u036f]/g, "")
-        .toUpperCase()
-    );
-
-    if (sheetNames.some((s) => s === "DRE" || s.includes("DRE"))) return "dre";
-    if (sheetNames.some((s) => s.includes("FILTROS"))) return "dre";
-
-    const ws = wb.Sheets[wb.SheetNames?.[0]];
-    const matrix = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "", raw: true });
-    const firstRows = matrix.slice(0, 40).map((r) => (r || []).map((c) => String(c ?? "").trim()));
-
-    const hasReceitaHeader = firstRows.some((r) => {
-      const joined = r.join(" ").toUpperCase();
-      const hasMes = r.some((c) => /M[EÊ]S/i.test(String(c || "")));
-      const hits = ["CENTRO", "COLINA", "SHOP", "VD", "VIRAD", "PITANG", "MONTE"].filter((x) => joined.includes(x)).length;
-      return hasMes && hits >= 2;
-    });
-
-    const hasRateioHeader = firstRows.some((r) => {
-      const joined = r.join(" ").toLowerCase();
-      return joined.includes("vencimento") && joined.includes("compet") && joined.includes("valor");
-    });
-
-    const hasMonthCols = firstRows.some((r) => r.some((c) => /^\d{2}\/\d{4}$/.test(String(c || "").trim())));
-
-    if (hasReceitaHeader) return "receita";
-    if (hasRateioHeader) return "rateio";
-    if (hasMonthCols) return "dre";
-  } catch {}
-
-  return "outro";
-}
-
-async function getDroppedFiles(ev) {
-  const dt = ev?.dataTransfer;
-  if (!dt) return [];
-
-  const items = Array.from(dt.items || []);
-  if (!items.length) {
-    return Array.from(dt.files || []).filter(Boolean);
-  }
-
-  const walkEntry = async (entry) => {
-    if (!entry) return [];
-    if (entry.isFile) {
-      return await new Promise((resolve) => {
-        entry.file((file) => resolve(file ? [file] : []), () => resolve([]));
-      });
-    }
-    if (entry.isDirectory) {
-      const reader = entry.createReader();
-      const entries = await new Promise((resolve) => {
-        const all = [];
-        const readBatch = () => {
-          reader.readEntries((batch) => {
-            if (!batch || !batch.length) return resolve(all);
-            all.push(...batch);
-            readBatch();
-          }, () => resolve(all));
-        };
-        readBatch();
-      });
-      const nested = await Promise.all(entries.map(walkEntry));
-      return nested.flat();
-    }
-    return [];
-  };
-
-  const entries = items
-    .map((item) => (typeof item.webkitGetAsEntry === "function" ? item.webkitGetAsEntry() : null))
-    .filter(Boolean);
-
-  if (!entries.length) {
-    return Array.from(dt.files || []).filter(Boolean);
-  }
-
-  const nested = await Promise.all(entries.map(walkEntry));
-  return nested.flat().filter(Boolean);
-}
-
 export default function DashboardRateioUploadInteligentePage() {
   const inputRef = useRef(null);
-  const folderInputRef = useRef(null);
 
   const [rows, setRows] = useState([]);
   const [fileMeta, setFileMeta] = useState({ name: "", size: 0, loadedAt: "" });
@@ -1658,8 +923,6 @@ export default function DashboardRateioUploadInteligentePage() {
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [dragActive, setDragActive] = useState(false);
-  const [smartUploadInfo, setSmartUploadInfo] = useState({ rateio: [], receita: "", dres: [], outros: [] });
 
   const [busca, setBusca] = useState("");
   const [fEmpresa, setFEmpresa] = useState("Todas");
@@ -1677,57 +940,6 @@ export default function DashboardRateioUploadInteligentePage() {
   const [budgetQuery, setBudgetQuery] = useState("");
   const [budgetEmpresaFilter, setBudgetEmpresaFilter] = useState("Todas");
   const [budgetMesFilter, setBudgetMesFilter] = useState("Todos");
-  const [budgetExpandedCodes, setBudgetExpandedCodes] = useState(() => new Set());
-  const [budgetManualCells, setBudgetManualCells] = useState(() => {
-    try {
-      if (typeof window === "undefined") return {};
-      const raw = window.localStorage.getItem(BUDGET_MANUAL_CELLS_LS_KEY);
-      const parsed = raw ? JSON.parse(raw) : {};
-      return parsed && typeof parsed === "object" ? parsed : {};
-    } catch {
-      return {};
-    }
-  });
-
-  useEffect(() => {
-    try {
-      if (typeof window === "undefined") return;
-      window.localStorage.setItem(BUDGET_MANUAL_CELLS_LS_KEY, JSON.stringify(budgetManualCells || {}));
-    } catch {}
-  }, [budgetManualCells]);
-
-
-
-  useEffect(() => {
-    const reloadManualBudgetCells = () => {
-      try {
-        const raw = window.localStorage.getItem(BUDGET_MANUAL_CELLS_LS_KEY);
-        const parsed = raw ? JSON.parse(raw) : {};
-        setBudgetManualCells(parsed && typeof parsed === "object" ? parsed : {});
-        setManualBudgetVersion((v) => v + 1);
-      } catch {}
-    };
-
-    const onStorage = (event) => {
-      if (event?.key === BUDGET_MANUAL_CELLS_LS_KEY || event?.key === "bi_service_budget_refresh_token") {
-        reloadManualBudgetCells();
-      }
-    };
-
-    const onMessage = (event) => {
-      if (event?.data?.type === "bi_service_budget_manual_updated") reloadManualBudgetCells();
-    };
-
-    window.addEventListener("storage", onStorage);
-    window.addEventListener("message", onMessage);
-    return () => {
-      window.removeEventListener("storage", onStorage);
-      window.removeEventListener("message", onMessage);
-    };
-  }, []);
-
-  const [budgetEditingCell, setBudgetEditingCell] = useState(null);
-  const [manualBudgetVersion, setManualBudgetVersion] = useState(0);
   const [budgets, setBudgets] = useState({}); // { [plano]: { value?: number, pct?: number, mode?: "value"|"pct" } }
   // UI state (permite digitar vírgula/ponto sem o input "pular")
   const [budgetUi, setBudgetUi] = useState({}); 
@@ -1760,39 +972,15 @@ export default function DashboardRateioUploadInteligentePage() {
     return new Set(mesesSel.slice().sort((a, b) => a - b).map((mi) => String(mi + 1).padStart(2, "0")));
   }, [mesesSel]);
 
-  const budgetDrePlanos = useMemo(() => {
-    const planos = Object.values(budgetEmpresaData?.entries || {})
-      .map((item) => String(item?.plano ?? "").trim())
-      .filter((plano) => plano && /^\d+(?:\.\d+)*\s*-/.test(plano));
-
-    return Array.from(new Set(planos)).sort((a, b) => compareBudgetPlanoOrder(a, b));
-  }, [budgetEmpresaData]);
-
-  const planoResolveCacheRef = useRef(new Map());
-  const planoResolveCacheKeyRef = useRef("");
-
-  const resolvePlanoMatchCached = (plano) => {
-    const cacheVersionKey = `${budgetDrePlanos.length}|${Object.keys(planoMatchMap || {}).length}`;
-    if (planoResolveCacheKeyRef.current !== cacheVersionKey) {
-      planoResolveCacheRef.current = new Map();
-      planoResolveCacheKeyRef.current = cacheVersionKey;
-    }
-
-    const key = normalizePlanoBudgetKey(plano);
-    if (!key) return resolvePlanoMatch(plano, budgetDrePlanos, planoMatchMap);
-
-    const cached = planoResolveCacheRef.current.get(key);
-    if (cached) return cached;
-
-    const result = resolvePlanoMatch(plano, budgetDrePlanos, planoMatchMap);
-    planoResolveCacheRef.current.set(key, result);
-    return result;
-  };
+  const budgetDrePlanos = useMemo(
+    () => Array.from(new Set(Object.values(budgetEmpresaData?.entries || {}).map((item) => String(item?.plano ?? "")).filter(Boolean))),
+    [budgetEmpresaData]
+  );
 
   const planoMatchDiagnostics = useMemo(() => {
     const diagnostics = {};
     for (const plano of Array.from(new Set(rows.map((r) => String(r?.plano ?? "")).filter(Boolean)))) {
-      diagnostics[plano] = resolvePlanoMatchCached(plano);
+      diagnostics[plano] = resolvePlanoMatch(plano, budgetDrePlanos, planoMatchMap);
     }
     return diagnostics;
   }, [rows, budgetDrePlanos, planoMatchMap]);
@@ -1823,32 +1011,19 @@ export default function DashboardRateioUploadInteligentePage() {
 
   const budgetEmpresaIndex = useMemo(() => {
     const index = new Map();
-
     for (const item of Object.values(budgetEmpresaData?.entries || {})) {
       const normalized = normalizePlanoBudgetKey(item?.plano);
       if (!normalized) continue;
-
       const arr = index.get(normalized) || [];
       arr.push(item);
       index.set(normalized, arr);
-
-      // Também indexa por código hierárquico.
-      // Assim, se o vínculo apontar para uma linha "mãe" do DRE,
-      // conseguimos buscar os filhos/folhas que entram no cálculo.
-      const code = budgetPlanoCode(item?.plano);
-      if (code) {
-        const codeKey = `code:${code}`;
-        const byCode = index.get(codeKey) || [];
-        byCode.push(item);
-        index.set(codeKey, byCode);
-      }
     }
-
     return index;
   }, [budgetEmpresaData]);
 
+  const generatedBudgetMetaForPlano = (plano, empresaFiltro = "Todas", monthKeySet = null) => {
+    const match = resolvePlanoMatch(plano, budgetDrePlanos, planoMatchMap);
 
-<<<<<<< HEAD
     if (!match?.matched || match?.mode === "approx") {
       return { valor: 0, estimado: false, match };
     }
@@ -1874,132 +1049,10 @@ export default function DashboardRateioUploadInteligentePage() {
 
     if (foundAny) {
       return { valor: total, estimado: false, match };
-=======
-  function getBudgetItemsForMatchedPlano(matchedPlano) {
-    const normalized = normalizePlanoBudgetKey(matchedPlano);
-    const directItems = budgetEmpresaIndex.get(normalized) || [];
-
-    const directEligible = directItems.filter((item) => item?.calcEligible !== false);
-    if (directEligible.length) return directEligible;
-
-    const code = budgetPlanoCode(matchedPlano);
-    if (code) {
-      const byCode = budgetEmpresaIndex.get(`code:${code}`) || [];
-      const byCodeEligible = byCode.filter((item) => item?.calcEligible !== false);
-      if (byCodeEligible.length) return byCodeEligible;
-
-      const children = budgetChildrenByParentCode.get(code) || [];
-      if (children.length) return children;
     }
 
-    return directItems;
-  }
-
-  const budgetChildrenByParentCode = useMemo(() => {
-    const map = new Map();
-    const all = Object.values(budgetEmpresaData?.entries || {});
-
-    for (const item of all) {
-      if (!item || item?.calcEligible === false) continue;
-      const code = budgetPlanoCode(item?.plano);
-      if (!code || !code.includes(".")) continue;
-
-      const parts = code.split(".");
-      for (let i = 1; i < parts.length; i++) {
-        const parent = parts.slice(0, i).join(".");
-        const arr = map.get(parent) || [];
-        arr.push(item);
-        map.set(parent, arr);
-      }
->>>>>>> dcd52f4 (atualiza projeto com supabase)
-    }
-
-    return map;
-  }, [budgetEmpresaData]);
-
-  const generatedBudgetMetaCache = useMemo(() => new Map(), [
-    budgetEmpresaData,
-    budgetEmpresaIndex,
-    budgetDrePlanos,
-    planoMatchMap,
-    budgetManualCells,
-    manualBudgetVersion,
-  ]);
-
-  const generatedBudgetMetaForPlano = (plano, empresaFiltro = "Todas", monthKeySet = null) => {
-    const monthKey = monthKeySet && monthKeySet.size
-      ? Array.from(monthKeySet).sort().join(",")
-      : "ALL";
-    const cacheKey = `${normalizePlanoBudgetKey(plano)}|${String(empresaFiltro || "Todas")}|${monthKey}`;
-
-    if (generatedBudgetMetaCache.has(cacheKey)) {
-      return generatedBudgetMetaCache.get(cacheKey);
-    }
-
-    const match = resolvePlanoMatchCached(plano);
-
-    if (!match?.matched || match?.mode === "approx") {
-      const result = { valor: 0, estimado: false, match };
-      generatedBudgetMetaCache.set(cacheKey, result);
-      return result;
-    }
-
-    const items = getBudgetItemsForMatchedPlano(match.matched);
-
-    let total = 0;
-    let foundAny = false;
-
-    for (const item of items) {
-      if (!budgetEmpresaMatchesFilter(item?.empresa, empresaFiltro)) continue;
-
-      const monthEntries = Object.entries(item?.months || {});
-      const filteredMonths = monthEntries.filter(([mes]) => monthMatchesFilter(mes, monthKeySet));
-
-      const manualKeys = [plano, item?.plano, match?.matched].filter(Boolean);
-      const manualTotalFromCell = getManualBudgetCellValueSeguro(budgetManualCells, item?.empresa, manualKeys, "Todos");
-      const manualTotalFromRuntime = Number.isFinite(Number(item?.manualTotalPrevisto)) ? Number(item.manualTotalPrevisto) : null;
-      const manualTotal = manualTotalFromCell != null ? manualTotalFromCell : manualTotalFromRuntime;
-
-      if (manualTotal != null) {
-        const monthCount = Math.max(1, Object.keys(item?.months || {}).length);
-        const selectedCount = monthKeySet && monthKeySet.size ? monthKeySet.size : monthCount;
-
-        // Se o dashboard está filtrando todos os meses, usa o total manual cheio.
-        // Se está filtrando só 1 ou alguns meses, distribui proporcionalmente.
-        const useFullTotal = !monthKeySet || selectedCount >= monthCount;
-        total += useFullTotal ? Math.abs(manualTotal) : (Math.abs(manualTotal) / monthCount) * selectedCount;
-
-        foundAny = true;
-        continue;
-      }
-
-      for (const [mes, mm] of filteredMonths) {
-        const manualMes = getManualBudgetCellValueSeguro(budgetManualCells, item?.empresa, manualKeys, mes);
-        const valorMes = manualMes != null
-          ? Math.abs(manualMes)
-          : budgetComparableValueFromMonth(mm);
-
-        if (Number.isFinite(valorMes)) {
-          total += valorMes;
-          foundAny = true;
-        }
-      }
-    }
-
-    if (foundAny) {
-      const result = { valor: total, estimado: false, match };
-      generatedBudgetMetaCache.set(cacheKey, result);
-      return result;
-    }
-
-    if (typeof window !== "undefined" && window.DEBUG_BUDGET_MATCH) {
-      console.warn("Plano com match mas sem previsto aplicado", { plano, empresaFiltro, monthKeySet, match });
-    }
-
-    const result = { valor: 0, estimado: false, match };
-    generatedBudgetMetaCache.set(cacheKey, result);
-    return result;
-  };;
+    return { valor: 0, estimado: false, match };
+  };
 
   const generatedBudgetValueForPlano = (plano, empresaFiltro = "Todas", monthKeySet = null) => {
     return generatedBudgetMetaForPlano(plano, empresaFiltro, monthKeySet).valor;
@@ -2188,9 +1241,6 @@ useEffect(() => {
         if (Array.isArray(parsed?.meta?.dreFiles)) {
           setBudgetDreFiles(parsed.meta.dreFiles.map((name) => ({ name, __restored: true })));
         }
-        if (parsed?.meta?.manualCells && typeof parsed.meta.manualCells === "object") {
-          setBudgetManualCells((prev) => ({ ...(parsed.meta.manualCells || {}), ...(prev || {}) }));
-        }
         setBudgetPersistTick((x) => x + 1);
       }
     } catch {}
@@ -2208,7 +1258,8 @@ useEffect(() => {
       // ignore
     }
   }, [budgets]);
-useEffect(() => {
+
+  useEffect(() => {
     if (!budgetEmpresaHydrated) return;
     try {
       const hasEntries = Object.keys(budgetEmpresaData?.entries || {}).length > 0;
@@ -2223,7 +1274,6 @@ useEffect(() => {
             receitaFile: budgetReceitaFile?.name || "",
             dreFiles: (budgetDreFiles || []).map((f) => f?.name || String(f)),
             summary: budgetEmpresaData?.summary || null,
-            manualCells: budgetManualCells || {},
             savedAt: new Date().toLocaleString("pt-BR"),
           },
         })
@@ -2253,7 +1303,6 @@ useEffect(() => {
     setDetailRows([]);
     setDetailQuery("");
     setError("");
-    setSmartUploadInfo({ rateio: [], receita: "", dres: [], outros: [] });
     setDedupeInfo({ removed: 0, kept: 0, total: 0 });
     try {
       localStorage.removeItem(LS_KEY);
@@ -2263,7 +1312,6 @@ useEffect(() => {
   async function handleFile(fileOrFiles) {
     setLoading(true);
     setError("");
-    setBudgetEmpresaError("");
     try {
       const files = Array.isArray(fileOrFiles)
         ? fileOrFiles.filter(Boolean)
@@ -2280,82 +1328,47 @@ useEffect(() => {
         }
       }
 
-      const classified = { rateio: [], receita: [], dre: [], outro: [] };
+      const parsedList = [];
       for (const file of files) {
-        const kind = await detectUploadKind(file);
-        classified[kind] = classified[kind] || [];
-        classified[kind].push(file);
+        const normalized = await parseXlsxSmart(file);
+        parsedList.push({ file, normalized });
       }
 
-      setSmartUploadInfo({
-        rateio: classified.rateio.map((f) => f.name),
-        receita: classified.receita[0]?.name || "",
-        dres: classified.dre.map((f) => f.name),
-        outros: classified.outro.map((f) => f.name),
-      });
-
-      if (classified.outro.length) {
-        throw new Error(`Arquivo(s) não reconhecido(s): ${classified.outro.map((f) => f.name).join(", ")}`);
+      const rawRows = parsedList.flatMap(({ normalized }) => Array.isArray(normalized?.rows) ? normalized.rows : []);
+      const dedupedMap = new Map();
+      for (const row of rawRows) {
+        const dedupeKey = [
+          String(row?.data ?? ""),
+          String(row?.competencia ?? ""),
+          normKey(row?.plano),
+          normKey(row?.conta),
+          normKey(row?.empresa),
+          normKey(row?.fornecedor),
+          normKey(row?.status),
+          Number(row?.valor || 0).toFixed(2),
+        ].join("|");
+        if (!dedupedMap.has(dedupeKey)) dedupedMap.set(dedupeKey, row);
       }
+      const nextRows = Array.from(dedupedMap.values());
+      const duplicatesRemoved = Math.max(0, rawRows.length - nextRows.length);
+      const totalSize = files.reduce((acc, file) => acc + (Number(file.size) || 0), 0);
+      const nextMeta = {
+        name: files.length === 1 ? files[0].name : `${files.length} arquivos de rateio`,
+        size: totalSize,
+        loadedAt: new Date().toLocaleString("pt-BR"),
+        count: files.length,
+        names: files.map((file) => file.name),
+        duplicatesRemoved,
+        rawCount: rawRows.length,
+        finalCount: nextRows.length,
+      };
 
-      if (classified.rateio.length) {
-        const parsedList = [];
-        for (const file of classified.rateio) {
-          const normalized = await parseXlsxSmart(file);
-          parsedList.push({ file, normalized });
-        }
-
-        const rawRows = parsedList.flatMap(({ normalized }) => Array.isArray(normalized?.rows) ? normalized.rows : []);
-        const dedupedMap = new Map();
-        for (const row of rawRows) {
-          const dedupeKey = [
-            String(row?.data ?? ""),
-            String(row?.competencia ?? ""),
-            normKey(row?.plano),
-            normKey(row?.conta),
-            normKey(row?.empresa),
-            normKey(row?.fornecedor),
-            normKey(row?.status),
-            Number(row?.valor || 0).toFixed(2),
-          ].join("|");
-          if (!dedupedMap.has(dedupeKey)) dedupedMap.set(dedupeKey, row);
-        }
-        const nextRows = Array.from(dedupedMap.values());
-        const duplicatesRemoved = Math.max(0, rawRows.length - nextRows.length);
-        const totalSize = classified.rateio.reduce((acc, file) => acc + (Number(file.size) || 0), 0);
-        const nextMeta = {
-          name: classified.rateio.length === 1 ? classified.rateio[0].name : `${classified.rateio.length} arquivos de rateio`,
-          size: totalSize,
-          loadedAt: new Date().toLocaleString("pt-BR"),
-          count: classified.rateio.length,
-          names: classified.rateio.map((file) => file.name),
-          duplicatesRemoved,
-          rawCount: rawRows.length,
-          finalCount: nextRows.length,
-        };
-
-        setRows(nextRows);
-        setFileMeta(nextMeta);
-        setDedupeInfo({ removed: duplicatesRemoved, kept: nextRows.length, total: rawRows.length });
-        try {
-          localStorage.setItem(LS_KEY, JSON.stringify({ rows: nextRows, meta: nextMeta }));
-        } catch {}
-      }
-
-      if (classified.receita.length || classified.dre.length) {
-        const receitaFileLocal = classified.receita[0] || budgetReceitaFile;
-        const dreFilesLocal = classified.dre.length ? classified.dre : budgetDreFiles;
-        setBudgetReceitaFile(receitaFileLocal || null);
-        setBudgetDreFiles(dreFilesLocal || []);
-        if (receitaFileLocal && dreFilesLocal?.length) {
-          setBudgetEmpresaLoading(true);
-          try {
-            await processBudgetEmpresaFilesFromFiles(receitaFileLocal, dreFilesLocal);
-          } finally {
-            setBudgetEmpresaLoading(false);
-          }
-        }
-      }
+      setRows(nextRows);
+      setFileMeta(nextMeta);
+      setDedupeInfo({ removed: duplicatesRemoved, kept: nextRows.length, total: rawRows.length });
+      try {
+        localStorage.setItem(LS_KEY, JSON.stringify({ rows: nextRows, meta: nextMeta }));
+      } catch {}
     } catch (e) {
       setError(e?.message ?? "Erro ao ler arquivo.");
     } finally {
@@ -2363,30 +1376,19 @@ useEffect(() => {
     }
   }
 
-  async function onDrop(ev) {
+  function onDrop(ev) {
     ev.preventDefault();
-    setDragActive(false);
-    const files = await getDroppedFiles(ev);
+    const files = Array.from(ev.dataTransfer?.files || []);
     if (files.length) handleFile(files);
   }
-
   function onDragOver(ev) {
     ev.preventDefault();
-    setDragActive(true);
-  }
-
-  function onDragLeave(ev) {
-    ev.preventDefault();
-    setDragActive(false);
   }
 
 
   
   function persistBudgetEmpresaState() {
     try {
-      if (typeof window !== "undefined") {
-        window.localStorage.setItem(BUDGET_MANUAL_CELLS_LS_KEY, JSON.stringify(budgetManualCells || {}));
-      }
       const hasEntries = Object.keys(budgetEmpresaData?.entries || {}).length > 0;
       const hasReceita = !!budgetReceitaFile?.name;
       const hasDres = (budgetDreFiles || []).length > 0;
@@ -2399,7 +1401,6 @@ useEffect(() => {
             receitaFile: budgetReceitaFile?.name || "",
             dreFiles: (budgetDreFiles || []).map((f) => f?.name || String(f)),
             summary: budgetEmpresaData?.summary || null,
-            manualCells: budgetManualCells || {},
             savedAt: new Date().toLocaleString("pt-BR"),
           },
         })
@@ -2409,12 +1410,13 @@ useEffect(() => {
 
   function persistDashboardState() {
     try {
-      const safeRows = Array.isArray(rows) ? rows : [];
-      if (!safeRows.length) {
-        const existing = localStorage.getItem(LS_KEY);
-        if (existing) return;
-      }
-      localStorage.setItem(LS_KEY, JSON.stringify({ rows: safeRows, meta: fileMeta }));
+      localStorage.setItem(
+        LS_KEY,
+        JSON.stringify({
+          rows,
+          meta: fileMeta,
+        })
+      );
     } catch {}
   }
 
@@ -2601,24 +1603,19 @@ useEffect(() => {
 
   function returnToDashboardFromBudget() {
     try {
-      if (typeof window !== "undefined") {
-        window.localStorage.setItem(BUDGET_MANUAL_CELLS_LS_KEY, JSON.stringify(budgetManualCells || {}));
-        window.localStorage.setItem("bi_service_budget_refresh_token", String(Date.now()));
-      }
+      persistDashboardState();
       persistBudgetEmpresaState();
-      persistViewFilters();
     } catch {}
-
     try {
       if (window.opener && !window.opener.closed) {
-        try { window.opener.postMessage({ type: "bi_service_budget_manual_updated" }, "*"); } catch {}
         try { window.opener.focus(); } catch {}
         try { window.close(); } catch {}
         return;
       }
     } catch {}
-
-    try { window.location.href = window.location.pathname; } catch {}
+    try {
+      window.location.href = window.location.pathname;
+    } catch {}
   }
 
 function openBudgetManager() {
@@ -2640,120 +1637,44 @@ function openBudgetManager() {
     setExecutadoOpen(true);
   }
 
-<<<<<<< HEAD
-=======
-
-  async function processBudgetEmpresaFilesFromFiles(receitaFileArg, dreFilesArg) {
-    const receitaFileLocal = receitaFileArg || budgetReceitaFile;
-    const dreFilesLocal = (dreFilesArg || budgetDreFiles || []).filter(Boolean);
-
-    if (!receitaFileLocal) throw new Error("Selecione a planilha de receita.");
-    if (!dreFilesLocal.length) throw new Error("Selecione os arquivos DRE das empresas.");
-
-    const restoredOnly = dreFilesLocal.some((f) => f?.__restored && typeof f?.arrayBuffer !== "function");
-    if (restoredOnly) {
-      if (Object.keys(budgetEmpresaData?.entries || {}).length) {
-        throw new Error("Os DREs mostrados foram restaurados só como referência. A base processada já está salva e pode ser usada no dashboard. Reenvie os arquivos apenas se quiser recalcular.");
-      }
-      throw new Error("Os nomes dos DREs foram restaurados, mas os arquivos originais não podem ser reabertos pelo navegador. Reenvie os DREs apenas se quiser recalcular a base.");
-    }
-
-    const receitaData = await parseBudgetReceitaXlsx(receitaFileLocal);
-    const dreDataList = [];
-    for (const f of dreFilesLocal) {
-      if (typeof f?.arrayBuffer !== "function") continue;
-      dreDataList.push(await parseBudgetDreXlsx(f));
-    }
-    const payload = buildBudgetEmpresaPayload(receitaData, dreDataList);
-    payload.summary = { ...(payload.summary || {}), savedAt: new Date().toLocaleString("pt-BR") };
-    setBudgetEmpresaData(payload);
-    setBudgetReceitaFile(receitaFileLocal);
-    setBudgetDreFiles(dreFilesLocal);
-    try {
-      localStorage.setItem(
-        BUDGET_EMPRESA_LS_KEY,
-        JSON.stringify({
-          data: payload,
-          meta: {
-            receitaFile: receitaFileLocal?.name || "",
-            dreFiles: dreFilesLocal.map((f) => f?.name || String(f)),
-            summary: payload?.summary || null,
-            savedAt: new Date().toLocaleString("pt-BR"),
-          },
-        })
-      );
-    } catch {}
-    return payload;
-  }
-
-
-
-
-
-
-  function setManualBudgetCell(empresa, plano, mes, rawValue) {
-    const key = manualBudgetCellKey(empresa, plano, mes);
-    const normalizedKey = manualBudgetNormalizedKey(empresa, plano, mes);
-    const n = parseNumberInput(rawValue);
-
-    setBudgetManualCells((prev) => {
-      const next = { ...(prev || {}) };
-      if (!Number.isFinite(n)) {
-        delete next[key];
-        delete next[normalizedKey];
-      } else {
-        const value = round2(n);
-        next[key] = value;
-        next[normalizedKey] = value;
-      }
-      try {
-        if (typeof window !== "undefined") {
-          window.localStorage.setItem(BUDGET_MANUAL_CELLS_LS_KEY, JSON.stringify(next));
-          window.localStorage.setItem("bi_service_budget_refresh_token", String(Date.now()));
-        }
-      } catch {}
-      return next;
-    });
-
-    setManualBudgetVersion((v) => v + 1);
-  }
-
-  function clearManualBudgetCell(empresa, plano, mes) {
-    const key = manualBudgetCellKey(empresa, plano, mes);
-    const normalizedKey = manualBudgetNormalizedKey(empresa, plano, mes);
-
-    setBudgetManualCells((prev) => {
-      const next = { ...(prev || {}) };
-      delete next[key];
-      delete next[normalizedKey];
-      try {
-        if (typeof window !== "undefined") {
-          window.localStorage.setItem(BUDGET_MANUAL_CELLS_LS_KEY, JSON.stringify(next));
-          window.localStorage.setItem("bi_service_budget_refresh_token", String(Date.now()));
-        }
-      } catch {}
-      return next;
-    });
-
-    setManualBudgetVersion((v) => v + 1);
-  }
-
-  function toggleBudgetPlano(code) {
-    if (!code) return;
-    setBudgetExpandedCodes((prev) => {
-      const next = new Set(prev || []);
-      if (next.has(code)) next.delete(code);
-      else next.add(code);
-      return next;
-    });
-  }
-
->>>>>>> dcd52f4 (atualiza projeto com supabase)
   async function processBudgetEmpresaFiles() {
     setBudgetEmpresaLoading(true);
     setBudgetEmpresaError("");
     try {
-      await processBudgetEmpresaFilesFromFiles(budgetReceitaFile, budgetDreFiles);
+      if (!budgetReceitaFile) throw new Error("Selecione a planilha de receita.");
+      if (!budgetDreFiles?.length) throw new Error("Selecione os arquivos DRE das empresas.");
+
+      const restoredOnly = (budgetDreFiles || []).some((f) => f?.__restored && typeof f?.arrayBuffer !== "function");
+      if (restoredOnly) {
+        if (Object.keys(budgetEmpresaData?.entries || {}).length) {
+          throw new Error("Os DREs mostrados foram restaurados só como referência. A base processada já está salva e pode ser usada no dashboard. Reenvie os arquivos apenas se quiser recalcular.");
+        }
+        throw new Error("Os nomes dos DREs foram restaurados, mas os arquivos originais não podem ser reabertos pelo navegador. Reenvie os DREs apenas se quiser recalcular a base.");
+      }
+
+      const receitaData = await parseBudgetReceitaXlsx(budgetReceitaFile);
+      const dreDataList = [];
+      for (const f of budgetDreFiles) {
+        if (typeof f?.arrayBuffer !== "function") continue;
+        dreDataList.push(await parseBudgetDreXlsx(f));
+      }
+      const payload = buildBudgetEmpresaPayload(receitaData, dreDataList);
+      payload.summary = { ...(payload.summary || {}), savedAt: new Date().toLocaleString("pt-BR") };
+      setBudgetEmpresaData(payload);
+      try {
+        localStorage.setItem(
+          BUDGET_EMPRESA_LS_KEY,
+          JSON.stringify({
+            data: payload,
+            meta: {
+              receitaFile: budgetReceitaFile?.name || "",
+              dreFiles: (budgetDreFiles || []).map((f) => f?.name || String(f)),
+              summary: payload?.summary || null,
+              savedAt: new Date().toLocaleString("pt-BR"),
+            },
+          })
+        );
+      } catch {}
     } catch (e) {
       setBudgetEmpresaError(e?.message || "Erro ao processar orçamento por empresa.");
     } finally {
@@ -3053,29 +1974,41 @@ const clearAllBudgets = () => {
     if (!generatedBudgetAvailable) return 0;
 
     let total = 0;
-<<<<<<< HEAD
     for (const plano of contasNoFiltro) {
       total += Math.abs(generatedBudgetValueForPlano(plano, fEmpresa, selectedMonthKeys));
-=======
-    for (const plano of contasNoFiltro || []) {
-      total += generatedBudgetValueForPlano(plano, fEmpresa, selectedMonthKeys);
->>>>>>> dcd52f4 (atualiza projeto com supabase)
+    }
+    return total;
+  }, [generatedBudgetAvailable, contasNoFiltro, fEmpresa, selectedMonthKeys, budgetEmpresaIndex, budgetDrePlanos, planoMatchMap]);
+
+  const generatedBudgetByMes = useMemo(() => {
+    const map = new Map();
+    if (!generatedBudgetAvailable) return map;
+
+    let monthList = [];
+    if (selectedMonthKeys?.size) {
+      monthList = Array.from(selectedMonthKeys).sort();
+    } else {
+      const monthSet = new Set();
+      for (const item of generatedBudgetEntriesFiltered) {
+        for (const mes of Object.keys(item?.months || {})) {
+          const mesNum = String(mes).split("-")[1] || "";
+          if (mesNum) monthSet.add(mesNum);
+        }
+      }
+      monthList = Array.from(monthSet).sort();
     }
 
-    return total;
-  }, [
-    generatedBudgetAvailable,
-    contasNoFiltro,
-    fEmpresa,
-    selectedMonthKeys,
-    budgetEmpresaData,
-    budgetEmpresaIndex,
-    budgetDrePlanos,
-    planoMatchMap,
-    budgetManualCells,
-  ]);
-
-
+    for (const mesNum of monthList) {
+      const onlyThisMonth = new Set([mesNum]);
+      let totalMes = 0;
+      for (const plano of contasNoFiltro) {
+        totalMes += generatedBudgetValueForPlano(plano, fEmpresa, onlyThisMonth);
+      }
+      const mesKey = `${budgetEmpresaData?.year || new Date().getFullYear()}-${mesNum}`;
+      map.set(mesKey, totalMes);
+    }
+    return map;
+  }, [generatedBudgetAvailable, contasNoFiltro, fEmpresa, selectedMonthKeys, budgetEmpresaData, budgetEmpresaIndex, budgetDrePlanos, planoMatchMap, generatedBudgetEntriesFiltered]);
 
 
 
@@ -3137,7 +2070,7 @@ const clearAllBudgets = () => {
     });
 
     return arr;
-  }, [contasNoFiltro, generatedBudgetAvailable, fEmpresa, selectedMonthKeys, budgetEmpresaIndex, budgetDrePlanos, planoMatchMap, planoMatchDiagnostics, realMapByPlano, budgets, totalGeral, budgetManualCells, manualBudgetVersion]);
+  }, [contasNoFiltro, generatedBudgetAvailable, fEmpresa, selectedMonthKeys, budgetEmpresaIndex, budgetDrePlanos, planoMatchMap, planoMatchDiagnostics, realMapByPlano, budgets, totalGeral]);
 
   const statusPlanosFiltered = useMemo(() => {
     const q = (statusModalQuery || "").trim().toLowerCase();
@@ -3182,77 +2115,22 @@ const clearAllBudgets = () => {
   }, [totalBaseAll]);
 
 
-  const filteredRealByPlanoMap = useMemo(() => {
-    const m = new Map();
-    for (const r of filtered) {
-      const plano = r?.plano;
-      if (!plano) continue;
-      m.set(plano, (m.get(plano) || 0) + (Number(r?.valor) || 0));
-    }
-    return m;
-  }, [filtered]);
-
-
-  function dreLabelForPlanoRateio(plano) {
-    try {
-      if (!generatedBudgetAvailable) return "";
-      const match = resolvePlanoMatchCached
-        ? resolvePlanoMatchCached(plano)
-        : resolvePlanoMatch(plano, budgetDrePlanos, planoMatchMap);
-
-      if (!match?.matched || match?.mode === "approx") return "";
-      return match.matched;
-    } catch {
-      return "";
-    }
-  }
-
-  function planoRateioComDreLabel(plano) {
-    const dre = dreLabelForPlanoRateio(plano);
-    return dre ? `${plano}  →  DRE: ${dre}` : String(plano ?? "");
-  }
-
   const byPlano = useMemo(() => {
-    const arr = Array.from(filteredRealByPlanoMap.entries())
+    const m = new Map();
+    for (const r of filtered) m.set(r.plano, (m.get(r.plano) ?? 0) + (r.valor || 0));
+    const arr = Array.from(m.entries())
       .map(([plano, valor]) => ({ plano, valor }))
       .sort((a, b) => b.valor - a.valor);
+    const total = arr.reduce((a, b) => a + (b.valor || 0), 0);
+    return arr.map((d) => ({
+      ...d,
+      budget: generatedBudgetAvailable ? generatedBudgetValueForPlano(d.plano, fEmpresa, selectedMonthKeys) : budgetValueForPlano(d.plano),
+      pct: total ? (d.valor / total) * 100 : 0,
+      pctLabel: total ? `${((d.valor / total) * 100).toFixed(1)}%` : "0.0%",
+    }));
+  }, [filtered, generatedBudgetAvailable, budgetEmpresaData, fEmpresa, selectedMonthKeys, budgets]);
 
-    const withBudget = arr.map((d) => {
-      const budget = generatedBudgetAvailable
-        ? generatedBudgetValueForPlano(d.plano, fEmpresa, selectedMonthKeys)
-        : budgetValueForPlano(d.plano);
-
-      return {
-        ...d,
-        budget,
-        hasBudget: Number.isFinite(Number(budget)) && Math.abs(Number(budget)) > 0.0001,
-      };
-    });
-
-    const total = withBudget.reduce((a, b) => a + (b.valor || 0), 0);
-    return withBudget.map((d) => {
-      const sharePct = total ? (d.valor / total) * 100 : 0;
-      const execPct = d.budget ? (d.valor / d.budget) * 100 : 0;
-      const dreLabel = dreLabelForPlanoRateio(d.plano);
-      return {
-        ...d,
-        dreLabel,
-        planoRateio: d.plano,
-        displayPlano: dreLabel ? `${d.plano}  →  DRE: ${dreLabel}` : d.plano,
-        pct: sharePct,
-        pctLabel: `${sharePct.toFixed(1)}%`,
-        execPct,
-        execPctLabel: d.budget ? `${execPct.toFixed(1)}%` : "0.0%",
-      };
-    });
-  }, [filteredRealByPlanoMap, generatedBudgetAvailable, budgetEmpresaData, fEmpresa, selectedMonthKeys, budgets, planoMatchMap, budgetManualCells, manualBudgetVersion]);
-
-  const byPlanoComPrevisto = useMemo(
-    () => byPlano.filter((d) => d.hasBudget),
-    [byPlano]
-  );
-
-  const topPlanos = useMemo(() => byPlanoComPrevisto.slice(0, 10), [byPlanoComPrevisto]);
+  const topPlanos = useMemo(() => byPlano.slice(0, 10), [byPlano]);
 
   const byMes = useMemo(() => {
     const m = new Map();
@@ -3265,60 +2143,12 @@ const clearAllBudgets = () => {
       .sort((a, b) => (a.mes > b.mes ? 1 : -1));
   }, [filtered]);
 
-  const generatedBudgetByMes = useMemo(() => {
-    const map = new Map();
-    if (!generatedBudgetAvailable) return map;
-
-    // O previsto do gráfico precisa respeitar exatamente os mesmos filtros do dashboard:
-    // empresa selecionada + planos filtrados + mês do ponto no gráfico.
-    // Não pode somar a base inteira do orçamento.
-    const mesesBase = Array.from(
-      new Set(
-        (byMes || [])
-          .map((it) => String(it?.mes || ""))
-          .filter(Boolean)
-      )
-    ).sort();
-
-    for (const mesKey of mesesBase) {
-      const mesNum = monthNumFromMesKey(mesKey);
-      const monthSet = mesNum ? new Set([mesNum]) : null;
-
-      // Se o usuário marcou meses específicos, não calcula os demais.
-      if (selectedMonthKeys && mesNum && !selectedMonthKeys.has(mesNum)) continue;
-
-      let total = 0;
-      for (const plano of contasNoFiltro || []) {
-        total += generatedBudgetValueForPlano(plano, fEmpresa, monthSet);
-      }
-
-      map.set(mesKey, total);
-      if (mesNum) map.set(mesNum, total);
-    }
-
-    return map;
-  }, [
-    generatedBudgetAvailable,
-    byMes,
-    contasNoFiltro,
-    fEmpresa,
-    selectedMonthKeys,
-    budgetEmpresaData,
-    budgetEmpresaIndex,
-    budgetDrePlanos,
-    planoMatchMap,
-    budgetManualCells,
-    manualBudgetVersion,
-  ]);
-
-
   const byMesBudget = useMemo(() => {
     if (!byMes.length) return byMes;
     return byMes.map((it) => {
       const totalMes = Number(it.valor ?? 0) || 0;
-      const mesNum = monthNumFromMesKey(it.mes);
       const orcado = generatedBudgetAvailable
-        ? (generatedBudgetByMes.get(it.mes) || generatedBudgetByMes.get(mesNum) || 0)
+        ? (generatedBudgetByMes.get(it.mes) || 0)
         : contasNoFiltro.reduce((acc, c) => acc + budgetValueForPlanoMes(c, totalMes, byMes.length), 0);
       return { ...it, orcado, budget: orcado };
     });
@@ -3440,7 +2270,7 @@ const clearAllBudgets = () => {
     // Opção 2: "Outros" só agrupa planos muito pequenos (ex.: < 1% do total)
     const THRESH_PCT = cutoffPct; // configurável
     const MAX_SLICES = 14; // segurança visual, caso existam muitos >= 1%
-    const arr = [...byPlanoComPrevisto];
+    const arr = [...byPlano];
 
     const grandes = arr.filter((d) => (d.pct ?? 0) >= THRESH_PCT);
     const pequenos = arr.filter((d) => (d.pct ?? 0) < THRESH_PCT);
@@ -3474,13 +2304,13 @@ const clearAllBudgets = () => {
       return { ...d, cumPct: run, cumPctLabel: `${run.toFixed(1)}%` };
     });
     return out2;
-  }, [byPlanoComPrevisto, cutoffPct]);
+  }, [byPlano, cutoffPct]);
 
 const outrosDetalhe = useMemo(() => {
     const THRESH_PCT = cutoffPct; // configurável
     const MAX_SLICES = 14;
 
-    const arr = [...byPlanoComPrevisto];
+    const arr = [...byPlano];
     const grandes = arr.filter((d) => (d.pct ?? 0) >= THRESH_PCT);
     const pequenos = arr.filter((d) => (d.pct ?? 0) < THRESH_PCT);
 
@@ -3498,12 +2328,12 @@ const outrosDetalhe = useMemo(() => {
     }));
 
     return { total, rows };
-  }, [byPlanoComPrevisto, cutoffPct]);
+  }, [byPlano, cutoffPct]);
 
 const outrosPlanos = useMemo(() => {
     const max = 9;
-    return byPlanoComPrevisto.slice(max);
-  }, [byPlanoComPrevisto]);
+    return byPlano.slice(max);
+  }, [byPlano]);
 
 
   // ------------------------
@@ -3750,133 +2580,29 @@ const outrosPlanos = useMemo(() => {
       const plano = String(item?.plano || "");
       const key = normKey(plano);
 
-      if (!map[key]) {
-        map[key] = {
-          plano,
-          values: {},
-          receitaValues: {},
-          total: 0,
-          receitaTotal: 0,
-          code: budgetPlanoCode(plano),
-          parentCode: budgetPlanoParentCode(plano),
-          level: budgetPlanoLevel(plano),
-        };
-      }
-
+      if (!map[key]) map[key] = { plano, values: {}, total: 0 };
       map[key].plano = plano;
 
       let totalItem = 0;
-      let manualApplied = false;
-
       if (budgetMesFilter !== "Todos") {
-        const manual = getManualBudgetCellValueRobusto(budgetManualCells, empresa, [plano], budgetMesFilter);
-        if (manual != null) {
-          totalItem = manual;
-          manualApplied = true;
-        } else {
-          totalItem = Number(item?.months?.[budgetMesFilter]?.previsto || 0);
-        }
+        totalItem = Number(item?.months?.[budgetMesFilter]?.previsto || 0);
       } else {
-        const manualTotal = getManualBudgetCellValueRobusto(budgetManualCells, empresa, [plano], "Todos");
-        if (manualTotal != null) {
-          totalItem = manualTotal;
-          manualApplied = true;
-        } else {
-          totalItem = 0;
-          for (const [mesKey, mm] of Object.entries(item?.months || {})) {
-            const manualMes = getManualBudgetCellValueRobusto(budgetManualCells, empresa, [plano], mesKey);
-            if (manualMes != null) {
-              totalItem += manualMes;
-              manualApplied = true;
-            } else {
-              totalItem += Number(mm?.previsto || 0);
-            }
-          }
-        }
-      }
-
-      let receitaItem = 0;
-      if (budgetMesFilter !== "Todos") {
-        receitaItem = Number(item?.months?.[budgetMesFilter]?.receita || 0);
-      } else {
-        for (const mm of Object.values(item?.months || {})) {
-          receitaItem += Number(mm?.receita || 0);
-        }
+        totalItem = Number(item?.totalPrevisto || 0);
       }
 
       map[key].values[empresa] = (map[key].values[empresa] || 0) + totalItem;
-      map[key].receitaValues[empresa] = (map[key].receitaValues[empresa] || 0) + receitaItem;
-      map[key].manual = map[key].manual || {};
-      if (manualApplied) map[key].manual[empresa] = true;
       map[key].total += totalItem;
-      map[key].receitaTotal += receitaItem;
     }
 
-    const allRows = Object.values(map).sort((a, b) => compareBudgetPlanoOrder(a, b));
-    return allRows
-      .map((r) => ({ ...r, hasChildren: budgetPlanoHasChildren(r, allRows) }))
-      .filter((r) => !q || String(r.plano).toLowerCase().includes(q));
-  }, [budgetEmpresaData, budgetQuery, budgetEmpresaFilter, budgetMesFilter, budgetManualCells]);
-
-
-  const budgetEmpresaRowsVisible = useMemo(() => {
-    const q = String(budgetQuery || "").trim();
-    if (q) return budgetEmpresaRows;
-    return budgetEmpresaRows.filter((row) => isBudgetPlanoVisibleInTree(row, budgetExpandedCodes));
-  }, [budgetEmpresaRows, budgetExpandedCodes, budgetQuery]);
-
+    return Object.values(map)
+      .filter((r) => !q || String(r.plano).toLowerCase().includes(q))
+      .sort((a, b) => String(a.plano).localeCompare(String(b.plano), "pt-BR"));
+  }, [budgetEmpresaData, budgetQuery, budgetEmpresaFilter, budgetMesFilter]);
 
   const budgetEmpresaCompaniesVisible = useMemo(() => {
     if (budgetEmpresaFilter !== "Todas") return [budgetEmpresaFilter];
     return budgetEmpresaCompanies;
   }, [budgetEmpresaCompanies, budgetEmpresaFilter]);
-
-
-  function EditableBudgetValue({ empresa, plano, value, manual, total = false }) {
-    const mes = budgetMesFilter === "Todos" ? "Todos" : budgetMesFilter;
-    const key = manualBudgetCellKey(empresa, plano, mes);
-    const editing = budgetEditingCell === key;
-
-    if (editing) {
-      return (
-        <input
-          autoFocus
-          defaultValue={fmtBRNumber(Number(value || 0))}
-          onFocus={(e) => e.target.select()}
-          onBlur={(e) => {
-            setManualBudgetCell(empresa, plano, mes, e.target.value);
-            setBudgetEditingCell(null);
-          }}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              setManualBudgetCell(empresa, plano, mes, e.currentTarget.value);
-              setBudgetEditingCell(null);
-            }
-            if (e.key === "Escape") {
-              setBudgetEditingCell(null);
-            }
-            if (e.key === "Delete") {
-              clearManualBudgetCell(empresa, plano, mes);
-              setBudgetEditingCell(null);
-            }
-          }}
-          className="w-32 rounded-md border border-sky-400/50 bg-[#0B1220] px-2 py-1 text-right text-white outline-none focus:ring-2 focus:ring-sky-500/40"
-        />
-      );
-    }
-
-    return (
-      <button
-        type="button"
-        onClick={() => setBudgetEditingCell(key)}
-        className={`w-full text-right hover:underline underline-offset-2 ${manual ? "text-amber-200 font-semibold" : total ? "text-white font-bold" : "text-white/80"}`}
-        title={manual ? "Valor editado manualmente. Clique para alterar." : "Clique para editar o previsto manualmente."}
-      >
-        {fmtBRL(value || 0)}
-        {manual ? <span className="ml-1 text-[10px] text-amber-300">✎</span> : null}
-      </button>
-    );
-  }
 
   async function exportBudgetEmpresaXlsx() {
     try {
@@ -4048,11 +2774,7 @@ const outrosPlanos = useMemo(() => {
             </div>
           </div>
         </header>
-<<<<<<< HEAD
         <main className="max-w-7xl mx-auto px-6 py-6 space-y-4">
-=======
-        <main className="max-w-7xl mx-auto px-5 py-5 space-y-3">
->>>>>>> dcd52f4 (atualiza projeto com supabase)
           <Card title="Filtros">
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
               <div>
@@ -4142,7 +2864,7 @@ const outrosPlanos = useMemo(() => {
             <button type="button" onClick={returnToDashboardFromStandalone} className="px-3 py-2 rounded-lg text-sm border bg-white/5 border-white/10 text-white/80 hover:bg-white/10">← Voltar</button>
           </div>
         </header>
-        <main className="max-w-7xl mx-auto px-5 py-5 space-y-3">
+        <main className="max-w-7xl mx-auto px-6 py-6 space-y-4">
           <Card title={`Status: ${statusModalKey === "ok" ? "Dentro" : statusModalKey === "warn" ? "Atenção" : statusModalKey === "over" ? "Estourado" : "Sem orçamento"}`}>
             <div className="mb-3 flex flex-wrap items-center gap-2">
               <input value={statusModalQuery} onChange={(e) => setStatusModalQuery(e.target.value)} placeholder="Buscar plano..." className="w-80 max-w-full rounded-xl bg-white/5 border border-white/10 px-3 py-2 text-sm text-white/80 outline-none focus:border-white/20" />
@@ -4185,7 +2907,7 @@ const outrosPlanos = useMemo(() => {
             </div>
           </div>
         </header>
-        <main className="max-w-7xl mx-auto px-5 py-5 space-y-3">
+        <main className="max-w-7xl mx-auto px-6 py-6 space-y-4">
           <Card title="Lista completa">
             <div className="mb-3 text-white/80">Total: {fmtBRL((Array.isArray(detailRows) && detailRows.length ? detailRows : outrosDetalhe.rows).reduce((acc, d) => acc + (Number(d?.valor || 0)), 0) || 0)}</div>
             <div className="max-h-[70vh] overflow-auto rounded-lg border border-white/10">
@@ -4235,7 +2957,7 @@ const outrosPlanos = useMemo(() => {
           </div>
         </header>
 
-        <main className="max-w-7xl mx-auto px-5 py-5 space-y-3">
+        <main className="max-w-7xl mx-auto px-6 py-6 space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             <Card title="Total (plano + filtros)">
               <div className="text-2xl font-bold" style={{ color: C_GREEN }}>{fmtBRL(drillTotal)}</div>
@@ -4268,7 +2990,7 @@ const outrosPlanos = useMemo(() => {
                           openDetail(`Títulos — Fornecedor: ${name}`, drillRows.filter((r) => r.fornecedor === name));
                         }}
                       >
-                        <LabelList dataKey="execPctLabel" position="top" offset={10} fill="rgba(255,255,255,0.75)" fontSize={12} />
+                        <LabelList dataKey="pctLabel" position="top" offset={10} fill="rgba(255,255,255,0.75)" fontSize={12} />
                       </Bar>
                     </ComposedChart>
                   </ResponsiveContainer>
@@ -4340,13 +3062,13 @@ const outrosPlanos = useMemo(() => {
               <div style={{ height: 340 }}>
                 {drillByMes.length ? (
                   <ResponsiveContainer width="100%" height={340}>
-                    <LineChart data={drillByMes} isAnimationActive={false}>
+                    <LineChart data={drillByMes}>
                       <CartesianGrid stroke="rgba(255,255,255,0.08)" strokeDasharray="3 3" />
                       <XAxis dataKey="mes" tick={{ fill: "rgba(255,255,255,0.65)", fontSize: 12 }} />
                       <YAxis tick={{ fill: "rgba(255,255,255,0.65)", fontSize: 12 }} />
                       <Tooltip cursor={false} content={<TooltipRich labelPrefix="Categoria" />} />
-                      <Line type="monotone" dataKey="previsto" name="Previsto" stroke={C_AMBER} strokeWidth={2} dot={false} strokeDasharray="6 4"  isAnimationActive={false}/>
-                      <Line type="monotone" dataKey="valor" name="Real" stroke={C_GREEN} strokeWidth={3} dot={false}  isAnimationActive={false}/>
+                      <Line type="monotone" dataKey="previsto" name="Previsto" stroke={C_AMBER} strokeWidth={2} dot={false} strokeDasharray="6 4" />
+                      <Line type="monotone" dataKey="valor" name="Real" stroke={C_GREEN} strokeWidth={3} dot={false} />
                     </LineChart>
                   </ResponsiveContainer>
                 ) : (
@@ -4374,7 +3096,7 @@ const outrosPlanos = useMemo(() => {
             <button type="button" onClick={returnToDashboardFromStandalone} className="px-3 py-2 rounded-lg text-sm border bg-white/5 border-white/10 text-white/80 hover:bg-white/10">← Voltar</button>
           </div>
         </header>
-        <main className="max-w-7xl mx-auto px-5 py-5 space-y-3">
+        <main className="max-w-7xl mx-auto px-6 py-6 space-y-4">
           <Card title="Detalhes">
             <div className="mb-3"><input value={detailQuery} onChange={(e) => setDetailQuery(e.target.value)} placeholder="Buscar na lista..." className="w-64 max-w-full rounded-lg px-3 py-2 bg-white/5 border border-white/10 text-white placeholder:text-white/40 outline-none focus:ring-2 focus:ring-sky-500/40 text-sm" /></div>
             <div className="overflow-auto rounded-xl border border-white/10">
@@ -4416,10 +3138,128 @@ const outrosPlanos = useMemo(() => {
           </div>
         </header>
 
-        <main className="max-w-7xl mx-auto px-5 py-5 space-y-3">
-          {/* Upload de orçamento removido: agora Receita + DRE são carregados pelo upload único inteligente da tela inicial. */}
+        <main className="max-w-7xl mx-auto px-6 py-6 space-y-4">
+          <Card title="Arquivos do orçamento por empresa">
+            <div className="grid grid-cols-1 xl:grid-cols-[1.2fr_1.2fr_auto] gap-3 items-end">
+              <div>
+                <div className="text-[11px] text-white/60 mb-1">Receita mensal (xlsx)</div>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => receitaBudgetInputRef.current?.click()}
+                    className="px-3 py-2 rounded-lg text-sm border bg-white/5 border-white/10 text-white/85 hover:bg-white/10"
+                  >
+                    Selecionar receita
+                  </button>
+                  <div className="flex-1 rounded-lg px-3 py-2 bg-white/5 border border-white/10 text-sm text-white/75 truncate">
+                    {budgetReceitaFile?.name || "Nenhum arquivo selecionado"}
+                  </div>
+                </div>
+                <input
+                  ref={receitaBudgetInputRef}
+                  type="file"
+                  accept=".xlsx,.xls"
+                  multiple
+                  className="hidden"
+                  onChange={(e) => setBudgetReceitaFile(e.target.files?.[0] || null)}
+                />
+              </div>
 
-<Card
+              <div>
+                <div className="text-[11px] text-white/60 mb-1">DREs das empresas (xlsx)</div>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => dreBudgetInputRef.current?.click()}
+                    className="px-3 py-2 rounded-lg text-sm border bg-white/5 border-white/10 text-white/85 hover:bg-white/10"
+                  >
+                    Selecionar DREs
+                  </button>
+                  <div className="flex-1 rounded-lg px-3 py-2 bg-white/5 border border-white/10 text-sm text-white/75 truncate">
+                    {budgetDreFiles?.length ? `${budgetDreFiles.length} arquivo(s)` : "Nenhum arquivo selecionado"}
+                  </div>
+                </div>
+                <input
+                  ref={dreBudgetInputRef}
+                  type="file"
+                  accept=".xlsx,.xls"
+                  multiple
+                  multiple
+                  className="hidden"
+                  onChange={(e) => setBudgetDreFiles(Array.from(e.target.files || []))}
+                />
+              </div>
+
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => processBudgetEmpresaFiles()}
+                  disabled={budgetEmpresaLoading}
+                  className="px-3 py-2 rounded-lg text-sm border bg-emerald-500/20 border-emerald-400/30 text-emerald-100 hover:bg-emerald-500/30 disabled:opacity-60"
+                >
+                  {budgetEmpresaLoading ? "Processando..." : "Gerar previsto"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => clearBudgetEmpresaBase()}
+                  className="px-3 py-2 rounded-lg text-sm border bg-white/5 border-white/10 text-white/75 hover:bg-white/10"
+                >
+                  Limpar base
+                </button>
+              </div>
+            </div>
+
+            {budgetEmpresaError && (
+              <div className="mt-3 rounded-lg border border-rose-400/20 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">
+                {budgetEmpresaError}
+              </div>
+            )}
+
+            <div className="mt-3 grid grid-cols-1 md:grid-cols-4 gap-3 text-sm">
+              <div className="rounded-xl border border-white/10 bg-black/10 p-3">
+                <div className="text-[11px] text-white/60">Receita selecionada</div>
+                <div className="text-white/85 mt-1">{budgetReceitaFile?.name || "Nenhum arquivo"}</div>
+                {budgetEmpresaData?.summary?.receitaFile && !budgetReceitaFile?.name && (
+                  <div className="text-[11px] text-white/50 mt-1">Base restaurada do armazenamento local</div>
+                )}
+              </div>
+              <div className="rounded-xl border border-white/10 bg-black/10 p-3">
+                <div className="text-[11px] text-white/60">DREs selecionados</div>
+                <div className="text-white/85 mt-1">{budgetDreFiles?.length ? `${budgetDreFiles.length} arquivo(s)` : "Nenhum arquivo"}</div>
+                {(budgetDreFiles || []).some((f) => f?.__restored) ? (
+                  <div className="text-[11px] text-white/50 mt-1">Os DREs restaurados são só referência visual. A base processada já ficou salva.</div>
+                ) : null}
+                {budgetEmpresaData?.summary?.dreFiles?.length ? (
+                  <div className="text-[11px] text-white/50 mt-1">Os nomes ficam salvos; a base usada no dashboard é a processada.</div>
+                ) : null}
+                {!!budgetEmpresaData?.summary?.dreFiles?.length && !budgetDreFiles?.length && (
+                  <div className="text-[11px] text-white/50 mt-1">Base restaurada do armazenamento local</div>
+                )}
+              </div>
+              <div className="rounded-xl border border-white/10 bg-black/10 p-3">
+                <div className="text-[11px] text-white/60">Combinações geradas</div>
+                <div className="text-white/85 mt-1">{Object.keys(budgetEmpresaData?.entries || {}).length || 0}</div>
+                {(budgetEmpresaData?.summary || budgetPersistTick) ? (
+                  <div className="text-[11px] text-emerald-200/80 mt-1">Base persistida no navegador</div>
+                ) : null}
+                {budgetEmpresaData?.summary?.combinacoes ? (
+                  <div className="text-[11px] text-white/50 mt-1">Base processada restaurável sem reenviar arquivos</div>
+                ) : null}
+              </div>
+              <div className="rounded-xl border border-white/10 bg-black/10 p-3">
+                <div className="text-[11px] text-white/60">Ano base</div>
+                <div className="text-white/85 mt-1">{budgetEmpresaData?.summary?.year || "—"}</div>
+              </div>
+            </div>
+
+            {!!budgetEmpresaData?.summary?.unmatchedCompanies?.length && (
+              <div className="mt-3 text-xs text-amber-200">
+                Empresas sem casamento entre Receita e DRE: {budgetEmpresaData.summary.unmatchedCompanies.join(", ")}
+              </div>
+            )}
+          </Card>
+
+          <Card
             title="Previsto por plano e empresa"
             right={
               <div className="w-full flex flex-col md:flex-row gap-2 md:items-end">
@@ -4429,11 +3269,7 @@ const outrosPlanos = useMemo(() => {
                     value={budgetQuery}
                     onChange={(e) => setBudgetQuery(e.target.value)}
                     placeholder="Buscar plano..."
-<<<<<<< HEAD
                     className="w-full rounded-lg px-3 py-2 bg-[#0B1220] border border-white/20 text-white placeholder:text-white/40 outline-none focus:ring-2 focus:ring-sky-500/40 text-sm"
-=======
-                    className="w-full rounded-lg px-3 py-1.5 bg-[#0B1220] border border-white/20 text-white placeholder:text-white/40 outline-none focus:ring-2 focus:ring-sky-500/40 text-sm"
->>>>>>> dcd52f4 (atualiza projeto com supabase)
                   />
                 </div>
                 <div className="w-full md:w-52">
@@ -4441,17 +3277,10 @@ const outrosPlanos = useMemo(() => {
                   <select
                     value={budgetEmpresaFilter}
                     onChange={(e) => setBudgetEmpresaFilter(e.target.value)}
-<<<<<<< HEAD
                     className="w-full rounded-lg px-3 py-2 bg-[#0B1220] border border-white/20 text-white outline-none focus:ring-2 focus:ring-sky-500/40 text-sm"
                   >
                     <option value="Todas" className="text-black bg-white">Todas</option>
                     {budgetEmpresaCompaniesVisible.map((empresa) => (
-=======
-                    className="w-full rounded-lg px-3 py-1.5 bg-[#0B1220] border border-white/20 text-white outline-none focus:ring-2 focus:ring-sky-500/40 text-sm"
-                  >
-                    <option value="Todas" className="text-black bg-white">Todas</option>
-                    {budgetEmpresaCompanies.map((empresa) => (
->>>>>>> dcd52f4 (atualiza projeto com supabase)
                       <option key={empresa} value={empresa} className="text-black bg-white">{empresa}</option>
                     ))}
                   </select>
@@ -4461,11 +3290,7 @@ const outrosPlanos = useMemo(() => {
                   <select
                     value={budgetMesFilter}
                     onChange={(e) => setBudgetMesFilter(e.target.value)}
-<<<<<<< HEAD
                     className="w-full rounded-lg px-3 py-2 bg-[#0B1220] border border-white/20 text-white outline-none focus:ring-2 focus:ring-sky-500/40 text-sm"
-=======
-                    className="w-full rounded-lg px-3 py-1.5 bg-[#0B1220] border border-white/20 text-white outline-none focus:ring-2 focus:ring-sky-500/40 text-sm"
->>>>>>> dcd52f4 (atualiza projeto com supabase)
                   >
                     <option value="Todos" className="text-black bg-white">Todos</option>
                     {budgetEmpresaMonths.map((mes) => (
@@ -4484,7 +3309,7 @@ const outrosPlanos = useMemo(() => {
             }
           >
             <div className="text-[11px] text-white/60 mb-3">
-              Os valores ficam salvos neste computador e você só precisa trocar os arquivos quando quiser atualizar a base. Agora você pode filtrar por empresa e por mês, exportar para XLSX e sobrescrever manualmente o previsto por plano no gerenciador de orçamentos.
+              Os valores ficam salvos neste computador e você só precisa trocar os arquivos quando quiser atualizar a base. Agora você pode filtrar por empresa e por mês, além de exportar para XLSX.
             </div>
 
             <div className="rounded-xl border border-white/10 overflow-hidden">
@@ -4497,48 +3322,18 @@ const outrosPlanos = useMemo(() => {
                         <th key={empresa} className="p-2 min-w-[160px] text-right">{`Previsto ${empresa}`}</th>
                       ))}
                       <th className="p-2 min-w-[160px] text-right">Total Previsto</th>
-                      <th className="p-2 min-w-[120px] text-right">% Receita</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {budgetEmpresaRowsVisible.map((row) => (
+                    {budgetEmpresaRows.map((row) => (
                       <tr key={row.plano} className="border-b border-white/5 hover:bg-white/5">
-                        <td className="p-2 text-white/85">
-                          <div
-                            className="flex items-center gap-2"
-                            style={{ paddingLeft: `${Math.max(0, (row.level || 1) - 1) * 18}px` }}
-                          >
-                            {row.hasChildren ? (
-                              <button
-                                type="button"
-                                onClick={() => toggleBudgetPlano(row.code)}
-                                className="h-5 w-5 rounded border border-white/15 bg-white/5 text-white/80 text-[11px] leading-none hover:bg-white/10"
-                                title={budgetExpandedCodes.has(row.code) ? "Recolher" : "Expandir"}
-                              >
-                                {budgetExpandedCodes.has(row.code) ? "−" : "+"}
-                              </button>
-                            ) : (
-                              <span className="inline-block h-5 w-5" />
-                            )}
-                            <span className={row.hasChildren ? "font-semibold text-white" : "text-white/85"}>
-                              {row.plano}
-                            </span>
-                          </div>
-                        </td>
+                        <td className="p-2 text-white/85">{row.plano}</td>
                         {budgetEmpresaCompaniesVisible.map((empresa) => (
                           <td key={empresa} className="p-2 text-right text-white/80">
-                            <EditableBudgetValue
-                              empresa={empresa}
-                              plano={row.plano}
-                              value={row.values?.[empresa] || 0}
-                              manual={!!row.manual?.[empresa]}
-                            />
+                            {fmtBRL(row.values?.[empresa] || 0)}
                           </td>
                         ))}
                         <td className="p-2 text-right text-white font-medium">{fmtBRL(row.total || 0)}</td>
-                        <td className={`p-2 text-right font-semibold ${(row.total || 0) < 0 ? "text-rose-200" : "text-emerald-200"}`}>
-                          {row.receitaTotal ? fmtBudgetPct(((row.total || 0) / row.receitaTotal) * 100) : "—"}
-                        </td>
                       </tr>
                     ))}
                     {!budgetEmpresaRows.length && (
@@ -4582,13 +3377,13 @@ const outrosPlanos = useMemo(() => {
         </div>
       </header>
 
-      <main className="max-w-7xl mx-auto px-5 py-5 space-y-3">
+      <main className="max-w-7xl mx-auto px-6 py-6 space-y-4">
         <Card
-          title="Carregar arquivos (.xlsx)"
+          title="Carregar arquivo de Rateio (.xlsx)"
           right={
-            rows.length || budgetReceitaFile || budgetDreFiles.length ? (
+            rows.length ? (
               <div className="text-[11px] text-white/60 text-right">
-                <div className="text-white/80 font-medium">{fileMeta.name || "Upload inteligente"}</div>
+                <div className="text-white/80 font-medium">{fileMeta.name}</div>
                 <div>{(fileMeta.size / 1024 / 1024).toFixed(2)}MB • {fileMeta.loadedAt}</div>
               </div>
             ) : (
@@ -4596,31 +3391,13 @@ const outrosPlanos = useMemo(() => {
             )
           }
         >
-          <div
-            onDrop={onDrop}
-            onDragOver={onDragOver}
-            onDragEnter={onDragOver}
-            onDragLeave={onDragLeave}
-            className={`rounded-xl border border-dashed p-3 transition-all duration-200 ${
-              dragActive
-                ? "border-emerald-400/80 bg-emerald-500/15 shadow-lg shadow-emerald-500/10 scale-[1.005]"
-                : "border-white/15 bg-white/5"
-            }`}
-          >
+          <div onDrop={onDrop} onDragOver={onDragOver} className="rounded-2xl border border-dashed border-white/15 bg-white/5 p-4">
             <div className="flex flex-col md:flex-row md:items-center gap-3 justify-between">
               <div className="space-y-1">
-                <div className="text-sm font-semibold text-white/90">{rows.length || budgetReceitaFile || budgetDreFiles.length ? "Arquivos carregados" : "Nenhum arquivo carregado"}</div>
-                {dragActive && <div className="text-[12px] font-semibold text-emerald-300 animate-pulse">Solte os arquivos aqui para carregar 🚀</div>}
-                <div className="text-[12px] text-white/60">Arraste arquivos/pasta ou selecione. Eu identifico Rateio, Receita e DRE(s) automaticamente.</div>
+                <div className="text-sm font-semibold text-white/90">{rows.length ? "Dataset carregado" : "Nenhum arquivo carregado"}</div>
+                <div className="text-[12px] text-white/60">Pode carregar 1 ou vários arquivos de rateio — eu junto tudo na mesma base, detecto o cabeçalho automaticamente e removo linhas idênticas repetidas.</div>
                 {dedupeInfo.removed > 0 && (
                   <div className="text-[12px] text-amber-300">Duplicidades removidas automaticamente: {dedupeInfo.removed} linha(s). Base final: {dedupeInfo.kept} de {dedupeInfo.total} linha(s).</div>
-                )}
-                {(smartUploadInfo.rateio.length || smartUploadInfo.receita || smartUploadInfo.dres.length) && (
-                  <div className="text-[12px] text-white/70 space-y-1">
-                    {!!smartUploadInfo.rateio.length && <div>Rateio: {smartUploadInfo.rateio.length} arquivo(s)</div>}
-                    {!!smartUploadInfo.receita && <div>Receita: {smartUploadInfo.receita}</div>}
-                    {!!smartUploadInfo.dres.length && <div>DRE(s): {smartUploadInfo.dres.length} arquivo(s)</div>}
-                  </div>
                 )}
                 {error && <div className="text-[12px] text-rose-300">Erro: {error}</div>}
                 {loading && <div className="text-[12px] text-white/70">Lendo arquivo...</div>}
@@ -4635,15 +3412,8 @@ const outrosPlanos = useMemo(() => {
                   Selecionar arquivo(s)
                 </button>
                 <button
-                  onClick={() => folderInputRef.current?.click()}
-                  className="px-3 py-1.5 rounded-lg bg-white/5 border border-white/10 hover:bg-white/10 text-xs font-medium"
-                  disabled={loading}
-                >
-                  Selecionar pasta
-                </button>
-                <button
                   onClick={clearData}
-                  className="px-3 py-1.5 rounded-lg bg-white/5 border border-white/10 hover:bg-white/10 text-xs font-medium"
+                  className="px-3 py-2 rounded-lg bg-white/5 border border-white/10 hover:bg-white/10 text-sm"
                   disabled={loading}
                 >
                   Limpar dataset
@@ -4653,16 +3423,6 @@ const outrosPlanos = useMemo(() => {
                   type="file"
                   accept=".xlsx,.xls"
                   multiple
-                  className="hidden"
-                  onChange={(e) => handleFile(Array.from(e.target.files || []))}
-                />
-                <input
-                  ref={folderInputRef}
-                  type="file"
-                  accept=".xlsx,.xls"
-                  multiple
-                  webkitdirectory=""
-                  directory=""
                   className="hidden"
                   onChange={(e) => handleFile(Array.from(e.target.files || []))}
                 />
@@ -4932,12 +3692,12 @@ const outrosPlanos = useMemo(() => {
             <div style={{ height: 390 }}>
               {topPlanos.length ? (
                 <ResponsiveContainer width="100%" height={390}>
-                  <BarChart data={topPlanos} barGap={-34} margin={{ top: 34, right: 12, left: 0, bottom: 0 }} isAnimationActive={false}>
+                  <BarChart data={topPlanos} barGap={-34} margin={{ top: 34, right: 12, left: 0, bottom: 0 }}>
                     <CartesianGrid stroke="rgba(255,255,255,0.08)" strokeDasharray="3 3" />
                     <XAxis dataKey="plano" hide />
                     <YAxis tick={{ fill: "rgba(255,255,255,0.65)", fontSize: 12 }} />
                     <Tooltip cursor={false} content={<TooltipRich labelPrefix="Categoria" />} />
-                    <Bar dataKey="budget" name="Previsto" fill={C_BLUE} fillOpacity={0.18} radius={[10, 10, 0, 0]} barSize={34}  isAnimationActive={false}/>
+                    <Bar dataKey="budget" name="Previsto" fill={C_BLUE} fillOpacity={0.18} radius={[10, 10, 0, 0]} barSize={34} />
                         <Bar dataKey="valor" name="Real" radius={[10, 10, 0, 0]} barSize={22} onClick={(d) => {
                       const plano = d?.name ?? d?.payload?.plano;
                       if (plano) {
@@ -4948,7 +3708,7 @@ const outrosPlanos = useMemo(() => {
                       {topPlanos.map((entry, i) => (
                         <Cell key={`top-plano-${i}`} fill={budgetStatusColor(entry)} />
                       ))}
-                      <LabelList dataKey="execPctLabel" position="top" offset={10} fill="rgba(255,255,255,0.75)" fontSize={12} />
+                      <LabelList dataKey="pctLabel" position="top" offset={10} fill="rgba(255,255,255,0.75)" fontSize={12} />
                     </Bar>
                   </BarChart>
                 </ResponsiveContainer>
@@ -4965,7 +3725,7 @@ const outrosPlanos = useMemo(() => {
               {mesesSel.length > 0 ? (
                 byAnoMesLinhas.data.length ? (
                   <ResponsiveContainer width="100%" height="100%">
-                    <LineChart data={byAnoMesLinhas.data} isAnimationActive={false}>
+                    <LineChart data={byAnoMesLinhas.data}>
                       <CartesianGrid strokeDasharray="3 3" />
                       <XAxis dataKey="ano" />
                       <YAxis />
@@ -4978,7 +3738,7 @@ const outrosPlanos = useMemo(() => {
                           stroke={PIE_COLORS[i % PIE_COLORS.length]}
                           strokeWidth={3}
                           dot={false}
-                         isAnimationActive={false}/>
+                        />
                       ))}
                       {byAnoMesLinhas.budgetKeys?.map((k, i) => (
                         <Line
@@ -4989,7 +3749,7 @@ const outrosPlanos = useMemo(() => {
                           strokeWidth={2}
                           strokeDasharray="6 4"
                           dot={false}
-                         isAnimationActive={false}/>
+                        />
                       ))}
                     </LineChart>
                   </ResponsiveContainer>
@@ -5009,9 +3769,9 @@ const outrosPlanos = useMemo(() => {
                       type="monotone"
                       dataKey="orcado"
                       name="Previsto"
-                      stroke={C_AMBER}
-                      fill={C_AMBER}
-                      fillOpacity={0.22}
+                      stroke={C_BLUE}
+                      fill={C_BLUE}
+                      fillOpacity={0.18}
                       isAnimationActive={false}
                     />
                     <Line
@@ -5075,7 +3835,7 @@ const outrosPlanos = useMemo(() => {
               data={outrosDetalhe.rows.slice(0, 20)}
               layout="vertical"
               margin={{ left: 24, right: 24, top: 8, bottom: 8 }}
-             isAnimationActive={false}>
+            >
 <XAxis
                 type="number"
                 tick={{ fill: "rgba(255,255,255,0.65)", fontSize: 12 }}
@@ -5091,8 +3851,8 @@ const outrosPlanos = useMemo(() => {
                 dataKey="valor"
                 fill={C_BLUE}
                 radius={[8, 8, 8, 8]}
-               isAnimationActive={false}>
-                <LabelList dataKey="execPctLabel" position="top" offset={10} fill="rgba(255,255,255,0.75)" fontSize={12} />
+              >
+                <LabelList dataKey="pctLabel" position="right" />
               </Bar>
             </BarChart>
           </ResponsiveContainer>
@@ -5178,7 +3938,7 @@ const outrosPlanos = useMemo(() => {
                 <div style={{ height: 340 }}>
                   {drillByFornecedor.length ? (
                     <ResponsiveContainer width="100%" height={340}>
-                      <BarChart data={drillByFornecedor} margin={{ top: 28, right: 12, left: 0, bottom: 0 }} isAnimationActive={false}>
+                      <BarChart data={drillByFornecedor} margin={{ top: 28, right: 12, left: 0, bottom: 0 }}>
                         <CartesianGrid stroke="rgba(255,255,255,0.08)"  />
                         <XAxis dataKey="name" hide />
                         <YAxis tick={{ fill: "rgba(255,255,255,0.65)", fontSize: 12 }} />
@@ -5202,7 +3962,7 @@ const outrosPlanos = useMemo(() => {
                 <div style={{ height: 340 }}>
                   {drillByEmpresa.length ? (
                     <ResponsiveContainer width="100%" height={340}>
-                      <BarChart data={drillByEmpresa} margin={{ top: 28, right: 12, left: 0, bottom: 0 }} isAnimationActive={false}>
+                      <BarChart data={drillByEmpresa} margin={{ top: 28, right: 12, left: 0, bottom: 0 }}>
                         <CartesianGrid stroke="rgba(255,255,255,0.08)" strokeDasharray="3 3" />
                         <XAxis dataKey="name" hide />
                         <YAxis tick={{ fill: "rgba(255,255,255,0.65)", fontSize: 12 }} />
@@ -5250,13 +4010,13 @@ const outrosPlanos = useMemo(() => {
                 <div style={{ height: 340 }}>
                   {drillByMes.length ? (
                     <ResponsiveContainer width="100%" height={340}>
-                      <LineChart data={drillByMes} isAnimationActive={false}>
+                      <LineChart data={drillByMes}>
                         <CartesianGrid stroke="rgba(255,255,255,0.08)" strokeDasharray="3 3" />
                         <XAxis dataKey="mes" tick={{ fill: "rgba(255,255,255,0.65)", fontSize: 12 }} />
                         <YAxis tick={{ fill: "rgba(255,255,255,0.65)", fontSize: 12 }} />
                         <Tooltip cursor={false} content={<TooltipRich labelPrefix="Categoria" />} />
-                        <Line type="monotone" dataKey="previsto" name="Previsto" stroke={C_AMBER} strokeWidth={2} dot={false} strokeDasharray="6 4"  isAnimationActive={false}/>
-                        <Line type="monotone" dataKey="valor" name="Real" stroke={C_GREEN} strokeWidth={3} dot={false}  isAnimationActive={false}/>
+                        <Line type="monotone" dataKey="previsto" name="Previsto" stroke={C_AMBER} strokeWidth={2} dot={false} strokeDasharray="6 4" />
+                        <Line type="monotone" dataKey="valor" name="Real" stroke={C_GREEN} strokeWidth={3} dot={false} />
                       </LineChart>
                     </ResponsiveContainer>
                   ) : (
