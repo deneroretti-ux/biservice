@@ -1,45 +1,46 @@
 'use client';
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { supabase } from '@/lib/supabase';
 
 export default function LoginPage() {
   const [email, setEmail] = useState('admin@admin.com');
   const [password, setPassword] = useState('123456');
   const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
   const router = useRouter();
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
+    setLoading(true);
 
     try {
-      const res = await fetch('/api/login', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ email, password }),
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email,
+        password,
       });
 
-      const data = await res.json();
-
-      if (!res.ok) {
-        setError(data.error || 'Erro ao fazer login.');
+      if (error) {
+        setError('E-mail ou senha inválidos.');
+        setLoading(false);
         return;
       }
 
-      // 🔹 Armazena token no localStorage e também em cookie
-      localStorage.setItem('token', data.token);
-      document.cookie = `token=${data.token}; Path=/; SameSite=Lax`;
+      localStorage.setItem('token', data.session?.access_token || '');
 
-      // 🔹 Redireciona para upload após login
       router.push('/area/upload');
+
     } catch (err: any) {
       setError(err?.message || 'Falha de rede ou erro inesperado.');
     }
+
+    setLoading(false);
   }
 
   return (
     <main className="min-h-screen flex flex-col items-center justify-center p-6 bg-[#0B1220]">
-      {/* Logo e nome */}
       <div className="flex items-center mb-6">
         <img
           src="/logo/logo.png"
@@ -52,7 +53,6 @@ export default function LoginPage() {
         </h1>
       </div>
 
-      {/* Formulário */}
       <form
         onSubmit={onSubmit}
         className="w-full max-w-sm space-y-4 rounded-2xl border border-white/10 p-6 bg-white/5 shadow-lg"
@@ -86,9 +86,10 @@ export default function LoginPage() {
 
         <button
           type="submit"
+          disabled={loading}
           className="w-full px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-semibold transition-all duration-200"
         >
-          Entrar
+          {loading ? 'Entrando...' : 'Entrar'}
         </button>
       </form>
     </main>
