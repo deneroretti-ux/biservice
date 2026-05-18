@@ -251,6 +251,7 @@ export default function DashboardAgricolaLimao(){
   const [rows,setRows]=useState([]); const [files,setFiles]=useState([]); const [filters,setFilters]=useState(EMPTY_FILTERS); const [autoStatus,setAutoStatus]=useState("Aguardando leitura automática..."); const [lastUpdate,setLastUpdate]=useState(""); const [activeCat,setActiveCat]=useState(null); const [activePlantioCat,setActivePlantioCat]=useState(null);
   async function carregarAutomatico(){
     try{
+<<<<<<< HEAD
       const fileName="agricola-demo.xlsx";
       setAutoStatus("Carregando dados demonstrativos online...");
       const res=await fetch(`/dados/${fileName}?t=${Date.now()}`,{cache:"no-store"});
@@ -260,10 +261,23 @@ export default function DashboardAgricolaLimao(){
         setAutoStatus(`Erro: arquivo demonstrativo não encontrado em /public/dados/${fileName}`);
         return;
       }
+=======
+      setAutoStatus("Lendo arquivo da pasta C:\\Users\\BiService\\Desktop\\TESTE...");
+      const res=await fetch(`/api/agricola-dados?t=${Date.now()}`,{cache:"no-store"});
+      if(!res.ok){
+        const msg=await res.text();
+        setRows([]);
+        setFiles([]);
+        setAutoStatus(`Erro: ${msg || res.status}`);
+        return;
+      }
+      const fileName=decodeURIComponent(res.headers.get("x-file-name")||"agricola.xlsx");
+>>>>>>> dcd52f4 (atualiza projeto com supabase)
       const buffer=await res.arrayBuffer();
       const wb=XLSX.read(buffer,{type:"array",cellDates:true});
       const linhas=buildRows(wb,fileName);
       setRows(linhas);
+<<<<<<< HEAD
       setFiles([`${fileName} (demo online)`]);
       setLastUpdate(new Date().toLocaleString("pt-BR"));
       setAutoStatus(`Dados demonstrativos carregados: ${fileName}`);
@@ -271,6 +285,13 @@ export default function DashboardAgricolaLimao(){
       setRows([]);
       setFiles([]);
       setAutoStatus(`Erro ao carregar demonstração: ${err?.message || err}`);
+=======
+      setFiles([`${fileName} (automático)`]);
+      setLastUpdate(new Date().toLocaleString("pt-BR"));
+      setAutoStatus(`Arquivo carregado automaticamente: ${fileName}`);
+    }catch(err){
+      setAutoStatus(`Erro na leitura automática: ${err?.message || err}`);
+>>>>>>> dcd52f4 (atualiza projeto com supabase)
     }
   }
 
