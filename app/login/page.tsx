@@ -28,9 +28,13 @@ export default function LoginPage() {
         return;
       }
 
-      localStorage.setItem('token', data.session?.access_token || '');
+      const token = data.session?.access_token || '';
 
-      router.push('/area/upload');
+      localStorage.setItem('token', token);
+
+      document.cookie = `token=${token}; Path=/; SameSite=Lax`;
+
+      window.location.href = '/area/upload';
 
     } catch (err: any) {
       setError(err?.message || 'Falha de rede ou erro inesperado.');
