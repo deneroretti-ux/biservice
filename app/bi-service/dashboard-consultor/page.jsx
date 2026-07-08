@@ -14,6 +14,7 @@ import {
   LineChart,
   Line,
   ReferenceLine,
+  LabelList,
 } from "recharts";
 import {
   Download,
@@ -466,19 +467,19 @@ function parseMetas(workbook) {
       metaConversao: normalizeRatio(toNumber(row[5])),
       metaB1: normalizeRatio(toNumber(row[6])),
 
-      // Confirmado pelo usuário no arquivo de metas:
-      // H = coluna 7 (0-based) = Meta Fidelidade Penetração
-      // P = coluna 15 (0-based) = Meta BP
-      // O = coluna 14 (0-based) = Meta BT
-      // S = coluna 18 (0-based) = Meta Skin
-      metaBp: normalizeRatio(toNumber(row[15])),
-      metaBt: normalizeRatio(toNumber(row[14])),
+      // Colunas do arquivo metas.xlsx:
+      // H = Meta Fidelidade Penetracao (0.20 = 20%)
+      // I = Meta Fidelidade Resgate
+      // J = Meta Treinamento
+      // O = Meta Boleto Turbinado
+      // P = Meta Boleto promocional
+      // S = Skin
       metaFidelidadePenetracao: normalizeRatio(toNumber(row[7])),
-      metaSkin: normalizeRatio(toNumber(row[18])),
-
-      // Mantidos conforme estrutura anterior da page
       metaFidelidadeResgate: normalizeRatio(toNumber(row[8])),
       metaTreinamento: normalizeRatio(toNumber(row[9])),
+      metaBt: normalizeRatio(toNumber(row[14])),
+      metaBp: normalizeRatio(toNumber(row[15])),
+      metaSkin: normalizeRatio(toNumber(row[18])),
     }))
     .filter((row) => row.consultorKey);
 }
@@ -726,23 +727,109 @@ function aggregateData(parsed) {
 }
 
 function Card({ children, style }) {
-  return <div style={{ background: COLORS.panel, border: `1px solid ${COLORS.border}`, borderRadius: 18, boxShadow: "0 8px 28px rgba(0,0,0,0.28)", ...style }}>{children}</div>;
+  return (
+    <div
+      style={{
+        background: "rgba(255,255,255,0.045)",
+        border: "1px solid rgba(255,255,255,0.10)",
+        borderRadius: 18,
+        boxShadow: "0 10px 28px rgba(0,0,0,0.32)",
+        backdropFilter: "blur(2px)",
+        ...style,
+      }}
+    >
+      {children}
+    </div>
+  );
 }
 
 function MetricCard({ title, value, subtitle, gaugeColor = COLORS.orange, percent = 0, icon }) {
   const Icon = icon;
   const safe = Math.max(0, Math.min(100, percent || 0));
   return (
-    <Card style={{ padding: 6 }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8, gap: 8 }}>
-        <div style={{ fontSize: 10, fontWeight: 800, color: COLORS.text, lineHeight: 1.05 }}>{title}</div>
-        {Icon ? <Icon size={13} color={COLORS.subtext} /> : null}
+    <Card
+      style={{
+        padding: "10px 12px",
+        minHeight: 88,
+        display: "flex",
+        flexDirection: "column",
+        justifyContent: "space-between",
+        position: "relative",
+        overflow: "hidden",
+        borderRadius: 18,
+      }}
+    >
+      <div
+        style={{
+          position: "absolute",
+          inset: "0 auto 0 0",
+          width: 3,
+          background: gaugeColor,
+          opacity: 0.75,
+        }}
+      />
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8 }}>
+        <div
+          style={{
+            fontSize: 10,
+            fontWeight: 500,
+            color: "rgba(255,255,255,0.64)",
+            lineHeight: 1.15,
+            textTransform: "uppercase",
+            letterSpacing: 0.45,
+          }}
+        >
+          {title}
+        </div>
+        {Icon ? (
+          <div
+            style={{
+              width: 26,
+              height: 26,
+              borderRadius: 11,
+              border: "1px solid rgba(255,255,255,0.10)",
+              background: "rgba(255,255,255,0.045)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              flexShrink: 0,
+            }}
+          >
+            <Icon size={13} color={gaugeColor} />
+          </div>
+        ) : null}
       </div>
-      <div style={{ fontSize: 11, color: COLORS.subtext, marginBottom: 3, fontWeight: 700 }}>{value}</div>
-      <div style={{ height: 5, background: "rgba(255,255,255,0.08)", borderRadius: 999, overflow: "hidden" }}>
-        <div style={{ width: `${safe}%`, height: "100%", background: gaugeColor, borderRadius: 999 }} />
+      <div
+        style={{
+          marginTop: 5,
+          fontSize: 19,
+          color: "rgba(255,255,255,0.92)",
+          fontWeight: 550,
+          lineHeight: 1,
+          letterSpacing: -0.25,
+          whiteSpace: "nowrap",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+        }}
+      >
+        {value}
       </div>
-      <div style={{ marginTop: 3, fontSize: 9, color: COLORS.subtext, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{subtitle}</div>
+      <div style={{ marginTop: 7, height: 5, background: "rgba(255,255,255,0.10)", borderRadius: 999, overflow: "hidden" }}>
+        <div style={{ width: `${safe}%`, height: "100%", background: gaugeColor, borderRadius: 999, boxShadow: `0 0 10px ${gaugeColor}44` }} />
+      </div>
+      <div
+        style={{
+          marginTop: 6,
+          fontSize: 9,
+          color: "rgba(255,255,255,0.52)",
+          fontWeight: 400,
+          whiteSpace: "nowrap",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+        }}
+      >
+        {subtitle}
+      </div>
     </Card>
   );
 }
@@ -1560,7 +1647,7 @@ const handleFiles = useCallback(async (fileList) => {
       style={{
         minHeight: "100vh",
         height: modoTelao ? "100vh" : "auto",
-        background: "linear-gradient(180deg, #000000 0%, #071122 100%)",
+        background: "#000000",
         color: COLORS.text,
         overflowX: "hidden",
         overflowY: modoTelao ? "hidden" : "auto",
@@ -1574,7 +1661,7 @@ const handleFiles = useCallback(async (fileList) => {
         html, body { background: #000000; }
         .consultor-tv-mode { font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
         .consultor-tv-mode .recharts-cartesian-axis-tick-value { font-size: 11px; }
-        .consultor-tv-mode .consultor-metrics-grid > div { min-height: 76px; }
+        .consultor-tv-mode .consultor-metrics-grid > div { min-height: 86px; }
         .consultor-tv-mode .consultor-title-small { font-size: 13px !important; }
         .consultor-tv-mode .consultor-ranking-scroll { max-height: calc(100vh - 255px); overflow: auto; }
         .consultor-tv-mode .consultor-normal-header { display: none !important; }
@@ -1680,7 +1767,7 @@ const handleFiles = useCallback(async (fileList) => {
 
         {!noData && current ? (
           <>
-            <div className="consultor-metrics-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 210px), 1fr))", gap: "clamp(5px, 0.6vw, 10px)", marginBottom: "clamp(5px, 0.6vw, 10px)" }}>
+            <div className="consultor-metrics-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 180px), 1fr))", gap: "clamp(5px, 0.6vw, 10px)", marginBottom: "clamp(5px, 0.6vw, 10px)" }}>
               <MetricCard title="Receita" value={formatCurrency(current.receita)} subtitle={current.metas?.receita ? `Meta: ${formatCurrency(current.metas.receita)}` : "Meta não informada"} percent={current.metas?.receita ? Math.min((current.receita / current.metas.receita) * 100, 100) : current.scorePct} gaugeColor={performanceColor(currentRatios?.receita || 0)} icon={TrendingUp} />
               <MetricCard title="B1" value={formatPercent(current.b1Pct)} subtitle={current.metas?.b1 ? `Meta: ${formatPercent(current.metas.b1)}` : `Boletos: ${formatNumber(current.boletos)}`} percent={current.metas?.b1 ? inverseGaugePercent(current.b1Pct, current.metas.b1) : 0} gaugeColor={performanceColor(currentRatios?.b1 || 0)} icon={Target} />
               <MetricCard title="BP" value={formatPercent(current.bpPct || 0)} subtitle={`Meta: ${formatPercent(current?.metas?.bp || 0)}`} percent={current.metas?.bp ? Math.min(((current.bpPct || 0) / current.metas.bp) * 100, 100) : (current.bpPct || 0) * 500} gaugeColor={performanceColor(currentRatios?.bp || 0)} icon={Target} />
@@ -1708,7 +1795,7 @@ const handleFiles = useCallback(async (fileList) => {
                         color: rankingType === "consultor" ? "#fff" : COLORS.text,
                         borderRadius: 999,
                         padding: "6px 12px",
-                        fontWeight: 800,
+                        fontWeight: 400,
                         fontSize: 12,
                         cursor: "pointer"
                       }}>Consultores</button>
@@ -1718,7 +1805,7 @@ const handleFiles = useCallback(async (fileList) => {
                         color: rankingType === "pdv" ? "#fff" : COLORS.text,
                         borderRadius: 999,
                         padding: "6px 12px",
-                        fontWeight: 800,
+                        fontWeight: 400,
                         fontSize: 12,
                         cursor: "pointer"
                       }}>PDVs</button>
@@ -1742,7 +1829,7 @@ const handleFiles = useCallback(async (fileList) => {
                           color: metricTab === key ? "#fff" : COLORS.text,
                           borderRadius: 999,
                           padding: "6px 12px",
-                          fontWeight: 800,
+                          fontWeight: 400,
                           cursor: "pointer",
                         }}
                       >
@@ -1752,9 +1839,9 @@ const handleFiles = useCallback(async (fileList) => {
                     </div>
                   </div>
                 </div>
-                <div className="consultor-ranking-scroll" style={{ height: rankingChartHeight, overflowY: rankingChartHeight > 360 ? "auto" : "visible" }}>
+                <div className="consultor-ranking-scroll" style={{ height: modoTelao ? 410 : 380, overflow: "hidden" }}>
                   <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={rankingSelectedData} layout="vertical" margin={{ left: 30, right: 10, top: 8, bottom: 8 }} onClick={(state) => {
+                    <BarChart data={rankingSelectedData} margin={{ left: 8, right: 24, top: 34, bottom: 72 }} onClick={(state) => {
                       const payload = state?.activePayload?.[0]?.payload;
                       if (!payload) return;
 
@@ -1785,28 +1872,54 @@ const handleFiles = useCallback(async (fileList) => {
                         }
                       }
                     }}>
-                      <CartesianGrid strokeDasharray="3 3" />
-                      <XAxis type="number" tick={{ fontSize: 11 }} />
-                      {rankingMetaValue > 0 ? <ReferenceLine x={rankingMetaValue} stroke="#ffffff" strokeDasharray="6 6" ifOverflow="extendDomain" /> : null}
-                      <YAxis dataKey="nome" type="category" width={105} tick={{ fontSize: 12 }} />
-                      <Tooltip formatter={(value) => metricTab === "receita" ? formatCurrency(Number(value)) : `${formatNumber(Number(value), 1)}%`} />
-                      <Bar dataKey="valor" barSize={12} radius={[0, 8, 8, 0]}>
+                      <CartesianGrid stroke="rgba(255,255,255,0.16)" strokeDasharray="3 3" vertical={false} />
+                      <XAxis
+                        dataKey="nome"
+                        type="category"
+                        interval={0}
+                        angle={-35}
+                        textAnchor="end"
+                        height={78}
+                        tick={{ fontSize: 10, fill: "rgba(255,255,255,0.78)" }}
+                        tickLine={{ stroke: "rgba(255,255,255,0.45)" }}
+                        axisLine={{ stroke: "rgba(255,255,255,0.65)" }}
+                      />
+                      <YAxis
+                        type="number"
+                        tick={{ fontSize: 11, fill: "rgba(255,255,255,0.82)" }}
+                        tickLine={{ stroke: "rgba(255,255,255,0.35)" }}
+                        axisLine={{ stroke: "rgba(255,255,255,0.65)" }}
+                        domain={[0, (dataMax) => Math.ceil(Number(dataMax || 0) * 1.15)]}
+                      />
+                      {rankingMetaValue > 0 ? <ReferenceLine y={rankingMetaValue} stroke="rgba(255,255,255,0.78)" strokeDasharray="4 4" ifOverflow="extendDomain" /> : null}
+                      <Tooltip
+                        cursor={{ fill: "rgba(255,255,255,0.04)" }}
+                        contentStyle={{ background: "#0b0b0b", border: `1px solid ${COLORS.border}`, borderRadius: 12, color: COLORS.text }}
+                        formatter={(value) => metricTab === "receita" ? formatCurrency(Number(value)) : `${formatNumber(Number(value), 1)}%`}
+                      />
+                      <Bar dataKey="valor" name={metricTab === "receita" ? "receita" : metricTab} barSize={54} radius={[0, 0, 0, 0]} cursor="pointer">
                         {rankingSelectedData.map((entry, index) => (
-                          <Cell key={`cell-${index}`} fill={entry.cor || COLORS.blue} />
+                          <Cell key={`ranking-cell-${index}`} fill={entry?.cor || performanceColor(entry?.atingimento || 0)} />
                         ))}
+                        <LabelList
+                          dataKey="valor"
+                          position="top"
+                          fill="#ffffff"
+                          fontSize={11}
+                          formatter={(value) => metricTab === "receita" ? formatCurrency(Number(value)).replace("R$", "R$") : formatNumber(Number(value), 0)}
+                        />
                       </Bar>
                     </BarChart>
                   </ResponsiveContainer>
                 </div>
               </Card>
 
-              <Card style={{ padding: 16 }}>
-                <div style={{ fontSize: 18, fontWeight: 900, marginBottom: 10 }}>Comparativo com a média</div>
+              <Card style={{ padding: 14 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, letterSpacing: "0.2px", color: COLORS.text, opacity: 0.88, marginBottom: 12 }}>Comparativo com a média</div>
                 {average ? (
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 150px), 1fr))", gap: "clamp(5px, 0.6vw, 8px)" }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: "12px", alignItems: "stretch" }}>
                     {[
                       ["Receita", formatCurrency(current.receita), formatCurrency(average.receita), performanceColor(currentRatios?.receita || 0), performanceColor(averageRatios?.receita || 0)],
-                      ["Score", formatPercent(current.score), formatPercent(average.score), performanceColor(current.score || 0), performanceColor(averageRatios?.score || 0)],
                       ["Ticket médio", formatCurrency(current.ticketMedio), formatCurrency(average.ticket), performanceColor(currentRatios?.boletoMedio || 0), performanceColor(averageRatios?.ticketMedio || 0)],
                       ["Conversão", formatPercent(current.conversao), formatPercent(average.conv), performanceColor(safeRatio(current.conversao || 0, current.metas?.conversao || 0, current.conversao ? current.conversao / 0.19 : 0)), performanceColor(averageRatios?.conversao || 0)],
                       ["B1", formatPercent(current.b1Pct), formatPercent(average.b1), performanceColor(currentRatios?.b1 || 0), performanceColor(averageRatios?.b1 || 0)],
@@ -1816,11 +1929,11 @@ const handleFiles = useCallback(async (fileList) => {
                       ["Fidelidade - Penetração", formatPercent(current.fidelidadePenetracao || 0), formatPercent(average.fidelidadePenetracao || 0), performanceColor(currentRatios?.fidelidadePenetracao || 0), performanceColor(averageRatios?.fidelidadePenetracao || 0)],
                       ["Fidelidade - Resgate", formatPercent(current.fidelidadeResgatePct || 0), formatPercent(average.fidelidadeResgate || 0), performanceColor(currentRatios?.fidelidadeResgate || 0), performanceColor(averageRatios?.fidelidadeResgate || 0)],
                     ].map(([label, mine, avg, mineColor, avgColor]) => (
-                      <div key={label} style={{ background: COLORS.panelAlt, border: `1px solid ${COLORS.border}`, borderRadius: 12, padding: 10, minHeight: 72 }}>
-                        <div style={{ fontSize: 11, color: COLORS.subtext, fontWeight: 700, lineHeight: 1.1 }}>{label}</div>
-                        <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 2, marginTop: 5 }}>
-                          <div style={{ fontWeight: 900, fontSize: 15, color: mineColor, lineHeight: 1.1 }}>{mine}</div>
-                          <div style={{ fontSize: 11, fontWeight: 800, color: avgColor, lineHeight: 1.1 }}>Média {avg}</div>
+                      <div key={label} style={{ background: "rgba(255,255,255,0.025)", border: `1px solid ${COLORS.border}`, borderRadius: 16, padding: 12, minHeight: 86, boxShadow: "inset 0 1px 0 rgba(255,255,255,0.035)", display: "flex", flexDirection: "column", justifyContent: "center" }}>
+                        <div style={{ fontSize: 10, color: COLORS.subtext, fontWeight: 500, letterSpacing: "0.35px", textTransform: "uppercase", lineHeight: 1.08, opacity: 0.72 }}>{label}</div>
+                        <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 3, marginTop: 6 }}>
+                          <div style={{ fontWeight: 600, fontSize: 14, letterSpacing: "-0.25px", color: mineColor, lineHeight: 1.05 }}>{mine}</div>
+                          <div style={{ fontSize: 10, fontWeight: 400, color: avgColor, lineHeight: 1.05, opacity: 0.78 }}>Média {avg}</div>
                         </div>
                       </div>
                     ))}

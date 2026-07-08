@@ -2,8 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
-import { LogOut } from 'lucide-react';
-import { useRouter } from 'next/navigation';
 import {
   BarChart,
   Bar,
@@ -142,7 +140,6 @@ function parseWorkbookToRows(wb: XLSX.WorkBook): Row[] {
       qtdpedidos: Number(qtdpedidos) || 0,
       qtditens: Number(qtditens) || 0,
       datahora,
-      datafat,
       datadia,
     };
 
@@ -262,8 +259,6 @@ function buildStats(allRows: Row[], filteredRows: Row[]): StatsResult {
 /* =============== PAGE =============== */
 
 export default function DashboardPage() {
-  const router = useRouter();
-
   const [allRows, setAllRows] = useState<Row[]>([]);
   const [data, setData] = useState<StatsResult | null>(null);
 
@@ -273,13 +268,12 @@ export default function DashboardPage() {
   const [to, setTo] = useState('');
   const [cidade, setCidade] = useState('');
   const [conferente, setConferente] = useState('');
-  const [topN, setTopN] = useState(5);
+  const topN = 5;
 
-  const fileRef = useRef<HTMLInputElement | null>(null);
+  const dragCounterRef = useRef(0);
+  const [isGlobalDragging, setIsGlobalDragging] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
   const [modoTelao, setModoTelao] = useState(false);
-  const [isDragging, setIsDragging] = useState(false);
-  const dragCounterRef = useRef(0);
 
   // Telão responsivo por escala (base 1920x1080)
   const BASE_W = 1920;
@@ -363,7 +357,6 @@ export default function DashboardPage() {
         qtdpedidos: Number(r.qtdpedidos ?? 0),
         qtditens: Number(r.qtditens ?? 0),
         datadia: r.datadia ? new Date(r.datadia) : null,
-        datafat: r.datafat ? new Date(r.datafat) : null,
         datahora: r.datahora ? new Date(r.datahora) : null,
       }));
 
@@ -418,35 +411,39 @@ export default function DashboardPage() {
     setErr('');
   }, [allRows, from, to, cidade, conferente]);
 
-  /* ====== Upload local direto por drag-and-drop global ====== */
-  const processFile = useCallback(async (file: File) => {
-    if (!file) return;
-    if (!/\.(xlsx|xls|csv)$/i.test(file.name)) {
-      setErr('Arraste uma planilha válida (.xlsx, .xls ou .csv).');
-      return;
-    }
+  /* ====== Drag global direto no dashboard ====== */
+  const processDroppedFiles = useCallback(async (fileList: FileList | File[]) => {
+    const files = Array.from(fileList || []).filter((file) => /\.(xlsx|xls|csv)$/i.test(file.name));
+    if (!files.length) return;
 
     setErr('');
     setLoading(true);
 
     try {
-      const buf = await file.arrayBuffer();
-      const wb = XLSX.read(buf, { type: 'array' });
-      const rows = parseWorkbookToRows(wb);
-      if (!rows.length) {
+      const allParsedRows: Row[] = [];
+
+      for (const file of files) {
+        const buf = await file.arrayBuffer();
+        const wb = XLSX.read(buf, { type: 'array' });
+        const rows = parseWorkbookToRows(wb);
+        allParsedRows.push(...rows);
+      }
+
+      if (!allParsedRows.length) {
         setErr('Não encontrei linhas válidas na planilha.');
         setAllRows([]);
       } else {
-        const serializable = rows.map((r) => ({
+        const serializable = allParsedRows.map((r) => ({
           ...r,
-          datafat: r.datafat ? r.datafat.toISOString() : null,
           datadia: r.datadia ? r.datadia.toISOString() : null,
           datahora: r.datahora ? r.datahora.toISOString() : null,
         }));
+
         if (typeof window !== 'undefined') {
           localStorage.setItem('conferenciaRows', JSON.stringify(serializable));
         }
-        setAllRows(rows);
+
+        setAllRows(allParsedRows);
       }
     } catch (error: any) {
       console.error(error);
@@ -454,47 +451,60 @@ export default function DashboardPage() {
       setAllRows([]);
     } finally {
       setLoading(false);
-      if (fileRef.current) fileRef.current.value = '';
     }
   }, []);
 
-  async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (file) await processFile(file);
-  }
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
 
-  const handleDragEnter = useCallback((e: React.DragEvent<HTMLElement>) => {
-    e.preventDefault();
-    e.stopPropagation();
-    dragCounterRef.current += 1;
-    setIsDragging(true);
-  }, []);
+    const hasFiles = (e: DragEvent) =>
+      Array.from(e.dataTransfer?.types || []).includes('Files');
 
-  const handleDragOver = useCallback((e: React.DragEvent<HTMLElement>) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
-  }, []);
+    const onDragEnter = (e: DragEvent) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      dragCounterRef.current += 1;
+      setIsGlobalDragging(true);
+    };
 
-  const handleDragLeave = useCallback((e: React.DragEvent<HTMLElement>) => {
-    e.preventDefault();
-    e.stopPropagation();
-    dragCounterRef.current -= 1;
-    if (dragCounterRef.current <= 0) {
+    const onDragOver = (e: DragEvent) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+      setIsGlobalDragging(true);
+    };
+
+    const onDragLeave = (e: DragEvent) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      dragCounterRef.current -= 1;
+      if (dragCounterRef.current <= 0) {
+        dragCounterRef.current = 0;
+        setIsGlobalDragging(false);
+      }
+    };
+
+    const onDrop = async (e: DragEvent) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
       dragCounterRef.current = 0;
-      setIsDragging(false);
-    }
-  }, []);
+      setIsGlobalDragging(false);
+      const files = e.dataTransfer?.files;
+      if (files?.length) await processDroppedFiles(files);
+    };
 
-  const handleDrop = useCallback(async (e: React.DragEvent<HTMLElement>) => {
-    e.preventDefault();
-    e.stopPropagation();
-    dragCounterRef.current = 0;
-    setIsDragging(false);
+    window.addEventListener('dragenter', onDragEnter);
+    window.addEventListener('dragover', onDragOver);
+    window.addEventListener('dragleave', onDragLeave);
+    window.addEventListener('drop', onDrop);
 
-    const file = Array.from(e.dataTransfer?.files || []).find((f) => /\.(xlsx|xls|csv)$/i.test(f.name));
-    if (file) await processFile(file);
-  }, [processFile]);
+    return () => {
+      window.removeEventListener('dragenter', onDragEnter);
+      window.removeEventListener('dragover', onDragOver);
+      window.removeEventListener('dragleave', onDragLeave);
+      window.removeEventListener('drop', onDrop);
+    };
+  }, [processDroppedFiles]);
 
   const safeArray = (x: any) => (Array.isArray(x) ? x : []);
   const fmt2 = (x: any) =>
@@ -526,25 +536,12 @@ export default function DashboardPage() {
   const offsetTelaoSafe = (typeof offsetTelao !== 'undefined' ? offsetTelao : { x: 0, y: 0 });
 
   return (
-    <main
-      onDragEnter={handleDragEnter}
-      onDragOver={handleDragOver}
-      onDragLeave={handleDragLeave}
-      onDrop={handleDrop}
-      className={modoTelao ? "relative w-screen h-screen overflow-hidden p-3" : "relative max-w-7xl mx-auto p-4 md:p-6"}
-    >
-      <input
-        ref={fileRef}
-        type="file"
-        accept=".xlsx,.xls,.csv"
-        className="hidden"
-        onChange={handleFileChange}
-      />
-      {isDragging && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center border-4 border-emerald-400/80 bg-black/70 text-white pointer-events-none">
-          <div className="rounded-2xl border border-emerald-400/60 bg-emerald-500/20 px-8 py-5 text-center shadow-2xl">
-            <div className="text-2xl font-bold">Solte a planilha aqui</div>
-            <div className="mt-1 text-sm text-white/80">O arquivo será carregado automaticamente</div>
+    <main className={modoTelao ? "w-screen h-screen overflow-hidden p-3" : "max-w-7xl mx-auto p-4 md:p-6"}>
+      {isGlobalDragging && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm pointer-events-none">
+          <div className="rounded-3xl border-2 border-dashed border-emerald-400 bg-emerald-500/10 px-10 py-8 text-center shadow-2xl">
+            <div className="text-2xl font-bold text-white">Solte a planilha aqui</div>
+            <div className="mt-2 text-sm text-white/70">O dashboard Conferente vai carregar automaticamente.</div>
           </div>
         </div>
       )}
@@ -652,51 +649,14 @@ export default function DashboardPage() {
         initial={{ opacity: 0, y: -10 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.6 }}
-        className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 md:gap-4 border-b border-white/10 pb-3 md:pb-4 mb-4"
+        className="flex flex-col md:flex-row md:items-center md:justify-end gap-3 md:gap-4 border-b border-white/10 pb-3 md:pb-4 mb-4"
       >
-        <div className="flex flex-wrap items-center gap-2 md:gap-3">
-          <label className="text-xs md:text-sm opacity-80">Top N</label>
-          <select
-            value={topN}
-            onChange={(e) => setTopN(parseInt(e.target.value, 10))}
-            className="bg-white text-black border border-gray-300 rounded px-2 md:px-3 py-1.5 md:py-2
-                       focus:outline-none focus:ring-2 focus:ring-blue-400 [color-scheme:light] text-sm md:text-base"
-          >
-            {[5, 10, 15, 20].map((n) => (
-              <option key={n} value={n} className="text-black">
-                {n}
-              </option>
-            ))}
-          </select>
-
-          <button
-            onClick={() => { setDiaTelaoAlterado(false); setModoTelao((v) => !v); }}
-            className="h-[42px] rounded bg-white/10 border border-white/10 px-3 text-sm text-white hover:bg-white/15"
-          >
-            {modoTelao ? "Modo Normal" : "Modo Telão"}
-          </button>
-
-          <button
-            onClick={() => router.push('/dashboard-estoque')}
-            className="flex items-center gap-2 px-3 md:px-4 py-2 rounded bg-sky-500 hover:bg-sky-600 transition font-semibold text-white text-sm md:text-base"
-          >
-            Estoque
-          </button>
-
-          <button
-            onClick={async () => {
-              try {
-                await fetch('/api/auth/logout', { method: 'POST' });
-              } catch {}
-              localStorage.removeItem('token');
-              window.location.href = '/';
-            }}
-            className="flex items-center gap-2 px-3 md:px-4 py-2 rounded bg-red-600 hover:bg-red-700 transition font-semibold text-white text-sm md:text-base"
-          >
-            <LogOut size={18} />
-            Sair
-          </button>
-        </div>
+        <button
+          onClick={() => { setDiaTelaoAlterado(false); setModoTelao((v) => !v); }}
+          className="h-[42px] rounded bg-white/10 border border-white/10 px-3 text-sm text-white hover:bg-white/15"
+        >
+          {modoTelao ? "Modo Normal" : "Modo Telão"}
+        </button>
       </motion.div>
 
       {/* Filtros */}
@@ -748,7 +708,7 @@ export default function DashboardPage() {
 
       {!loading && !err && !allRows.length && (
         <div className="mt-6 rounded-xl border border-white/10 bg-white/5 p-4 text-sm text-white/80">
-          Arraste a planilha de conferência em qualquer lugar desta página para carregar automaticamente.
+          Arraste a planilha de conferência em qualquer área da página para carregar.
         </div>
       )}
 
